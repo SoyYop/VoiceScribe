@@ -1,0 +1,14 @@
+{
+  "ModelDownloadsPath": "C:/Fuentes/AI/speech/artifacts/models/nemotron-3.5-asr",
+  "RepoUrl": "https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4/resolve/main",
+  "ModelFiles": [
+        "encoder.onnx", 
+        "encoder.onnx.data", 
+        "decoder.onnx", "decoder.onnx.data",
+        "joint.onnx", "joint.onnx.data",
+        "tokenizer.json",
+        "genai_config.json",
+        "audio_processor_config.json",
+        "model_config.json"
+    ]
+}
