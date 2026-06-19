@@ -8,13 +8,18 @@ using Microsoft.Extensions.Logging;
 
 using NAudio.Wave;
 
-using VoiceScribe;
+using VoiceScribe.Core.Configuration;
+using VoiceScribe.Core.Engine;
+using VoiceScribe.Core.ModelAssets;
 
 class Program
 {
     private static readonly SpeechAppConfig DefaultConfig = new()
     {
-        ModelDownloadsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "artifacts", "models", "nemotron-3.5-asr"),
+        ModelDownloadsPath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "artifacts", "models", "nemotron-3.5-asr")),
         RepoUrl = "https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4/resolve/main",
         ModelFiles = [
             "encoder.onnx",
@@ -61,7 +66,8 @@ class Program
             }
         }
 
-        var config = await SpeechAppConfig.FromJsonFileAsync(engineLogger, "SpeechAppConfig.json", defaultConfig: DefaultConfig);
+        var configPath = Path.Combine(AppContext.BaseDirectory, "SpeechAppConfig.json");
+        var config = await SpeechAppConfig.FromJsonFileAsync(engineLogger, configPath, defaultConfig: DefaultConfig);
 
         if (config == null)
         {

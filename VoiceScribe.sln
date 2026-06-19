@@ -3,7 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.6.11822.322 stable
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VoiceScribe", "VoiceScribe.csproj", "{3DB16573-5817-9610-6C8A-B10FC214F38A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VoiceScribe.Console", "src\VoiceScribe.Console\VoiceScribe.Console.csproj", "{3DB16573-5817-9610-6C8A-B10FC214F38A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VoiceScribe.Core", "src\VoiceScribe.Core\VoiceScribe.Core.csproj", "{C5DF5B91-4D73-4C9A-A32A-84B7F8E5B7D1}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,6 +17,10 @@ Global
 		{3DB16573-5817-9610-6C8A-B10FC214F38A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3DB16573-5817-9610-6C8A-B10FC214F38A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3DB16573-5817-9610-6C8A-B10FC214F38A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C5DF5B91-4D73-4C9A-A32A-84B7F8E5B7D1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C5DF5B91-4D73-4C9A-A32A-84B7F8E5B7D1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C5DF5B91-4D73-4C9A-A32A-84B7F8E5B7D1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C5DF5B91-4D73-4C9A-A32A-84B7F8E5B7D1}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

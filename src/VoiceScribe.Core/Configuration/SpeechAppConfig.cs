@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using Microsoft.Extensions.Logging;
 
-namespace VoiceScribe
+namespace VoiceScribe.Core.Configuration
 {
 
     /// <summary>

@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace VoiceScribe
+namespace VoiceScribe.Core.ModelAssets
 {
     /// <summary>
     /// Downloads models from HuggingFace repository and saves them to a local folder. It also provides a progress bar for each download.

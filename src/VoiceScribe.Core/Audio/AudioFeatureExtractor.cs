@@ -4,7 +4,7 @@ using System.Linq;
 using System.Numerics;
 using System.Text.Json;
 
-namespace VoiceScribe
+namespace VoiceScribe.Core.Audio
 {
     public sealed record AudioFeatures(float[] Data, int Frames, int MelBins);
 
