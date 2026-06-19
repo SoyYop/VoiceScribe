@@ -7,9 +7,10 @@ namespace VoiceScribe.Core.Configuration
 {
 
     /// <summary>
-    /// Configuration class for the speech application. It defines properties for model file management and provides a method to load configuration from a JSON file, with fallback to default values if the file is missing or invalid.
+    /// Configuration class for the speech application. It defines properties for model file management and provides a method to load
+    /// configuration from a JSON file, with fallback to default values if the file is missing or invalid.
     /// </summary>
-    public class SpeechAppConfig
+    public class VoiceAppConfig
     {
         /// <summary>
         /// Path where the model files will be downloaded and stored. If not specified, it defaults to a "NemotronWeights" folder in the application's base directory.
@@ -34,7 +35,7 @@ namespace VoiceScribe.Core.Configuration
         /// </summary>
         /// <param name="fileName"></param>
         /// <returns></returns>
-        public static async Task<SpeechAppConfig?> FromJsonFileAsync(ILogger logger, string fileName, SpeechAppConfig? defaultConfig = null)
+        public static async Task<VoiceAppConfig?> FromJsonFileAsync(ILogger logger, string fileName, VoiceAppConfig? defaultConfig = null)
         {
             if (!File.Exists(fileName))
             {                
@@ -42,11 +43,11 @@ namespace VoiceScribe.Core.Configuration
                 return defaultConfig;
             }
 
-            SpeechAppConfig config = null!;
+            VoiceAppConfig config = null!;
             try
             {
                 using (FileStream configStream = new FileStream(fileName, FileMode.Open, FileAccess.Read))
-                    config = await System.Text.Json.JsonSerializer.DeserializeAsync<SpeechAppConfig>(configStream) ?? new SpeechAppConfig();
+                    config = await System.Text.Json.JsonSerializer.DeserializeAsync<VoiceAppConfig>(configStream) ?? new VoiceAppConfig();
             }
             catch (Exception ex)
             {

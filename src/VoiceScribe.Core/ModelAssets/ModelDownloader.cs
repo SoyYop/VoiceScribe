@@ -9,19 +9,17 @@ namespace VoiceScribe.Core.ModelAssets
     /// </summary>
     public class ModelDownloader
     {
-        private readonly HttpClient _httpClient;
+        
         private readonly string _modelFolder;
         private readonly string _repoUrl;
 
         /// <summary>
         /// ctor
         /// </summary>
-        /// <param name="httpClient">http client</param>
         /// <param name="repoUrl">Repo url (HugginFace)</param>
         /// <param name="modelFolder">Folder to store weight model files</param>        
-        public ModelDownloader(HttpClient httpClient, string repoUrl, string modelFolder)
+        public ModelDownloader( string repoUrl, string modelFolder)
         {
-            _httpClient = httpClient;
             _modelFolder = modelFolder;
             _repoUrl = repoUrl;
         }
@@ -32,7 +30,7 @@ namespace VoiceScribe.Core.ModelAssets
         /// </summary>
         /// <param name="modelFiles">List of files to download from the HuggingFace repository.</param>
         /// <returns></returns>
-        public async Task HandleModelDownload(IEnumerable<string> modelFiles)
+        public async Task HandleModelDownload(HttpClient httpClient, IEnumerable<string> modelFiles)
         {
             Directory.CreateDirectory(_modelFolder);
             Console.WriteLine("\nStarting automated download loop...");
@@ -41,7 +39,7 @@ namespace VoiceScribe.Core.ModelAssets
             {
                 string fileUrl = $"{_repoUrl}/{file}";
                 Console.WriteLine($"\nFetching: {file}");
-                await DownloadWithProgress(fileUrl, file);
+                await DownloadWithProgress(httpClient, fileUrl, file);
             }
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("\n[Success] All streaming assets downloaded successfully.");
@@ -56,7 +54,7 @@ namespace VoiceScribe.Core.ModelAssets
         /// <param name="fileName"></param>
         /// <param name="overwrite"></param>
         /// <returns></returns>
-        private async Task DownloadWithProgress(string url, string fileName, bool overwrite = false)
+        private async Task DownloadWithProgress(HttpClient httpClient, string url, string fileName, bool overwrite = false)
         {
             string destinationPath = Path.Combine(_modelFolder, fileName);
 
@@ -75,7 +73,7 @@ namespace VoiceScribe.Core.ModelAssets
             ;
 
 
-            using (var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+            using (var response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
                 long? totalBytes = response.Content.Headers.ContentLength;

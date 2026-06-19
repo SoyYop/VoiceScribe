@@ -4,38 +4,68 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 
 using NAudio.Wave;
 
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-
 using VoiceScribe.Core.Audio;
 
+
+/// <summary>
+/// NemotronEngine es la clase central que maneja la inferencia de los modelos ONNX para el reconocimiento de voz en tiempo real. 
+/// Se encarga de cargar los modelos, procesar los datos de audio, mantener los estados de los búferes acústicos y lingüísticos, 
+/// y emitir los tokens reconocidos. Además, incluye funciones de diagnóstico para inspeccionar las sesiones de ONNX y los tensores
+/// de activación, lo que facilita la depuración y optimización del proceso de inferencia. 
+/// La clase implementa IDisposable para asegurar la liberación adecuada de recursos como las sesiones de ONNX y los escritores de archivos.
+/// </summary>  
 namespace VoiceScribe.Core.Engine
 {
     public class NemotronEngine : IDisposable
     {
         private readonly ILogger<NemotronEngine> _logger;
+
+        private StreamWriter? _fileWriter;
+
+        private bool _isDisposed;
+
+        // Sesiones de ONNX Runtime para cada modelo
         private InferenceSession _encoderSession = null!;
         private InferenceSession _decoderSession = null!;
         private InferenceSession _jointSession = null!;
-        private Dictionary<long, string> _vocab = null!;
-        private StreamWriter? _fileWriter;
-        private AudioFeatureExtractor _featureExtractor = null!;
-        private bool _isDisposed;
 
+        // Estados del búfer lingüístico (Decoder / Transducer)
+        private DenseTensor<long> _decoderTargets = null!;
+        private DenseTensor<float> _decoderHIn = null!;
+        private DenseTensor<float> _decoderCIn = null!;        
+               
         // Estados del búfer acústico (Cachés de streaming)
         private DenseTensor<float> _cacheLastChannel = null!;
         private DenseTensor<float> _cacheLastTime = null!;
         private DenseTensor<long> _cacheLastChannelLen = null!;
 
-        // Estados del búfer lingüístico (Decoder / Transducer)
-        private DenseTensor<long> _decoderTargets = null!;
-        private DenseTensor<float> _decoderHIn = null!;
-        private DenseTensor<float> _decoderCIn = null!;
-        private long _lastPredictedToken = -1;
+        // Vocabulario mapeado desde tokenizer.json (Índice de token → String del token)
+        private Dictionary<long, string> _vocab = null!;
+        
+        /// <summary>
+        /// Extractor acústico para convertir los fragmentos de audio PCM en características log-mel, que son las entradas esperadas por el modelo
+        /// encoder. Se inicializa a partir de un archivo de configuración específico que define los parámetros del extractor, como el número de 
+        /// filtros mel, la ventana de análisis, etc.
+        /// Este extractor es crucial para el preprocesamiento del audio y la generación de las características que alimentan el modelo de reconocimiento
+        /// de voz. 
+        /// </summary>
+        private AudioFeatureExtractor _featureExtractor = null!;
+
+
+        // Constantes para el proceso de decodificación RNN-T
         private const long BlankId = 13087;
         private const int MaxSymbolsPerStep = 10;
+
+        /// <summary>
+        /// Último token predicho por el modelo. Se utiliza para mantener el estado del decoder y evitar emitir tokens repetidos o no deseados. 
+        /// Este campo se actualiza cada vez que se emite un token reconocido, y se puede utilizar para implementar lógica adicional de filtrado o
+        /// post-procesamiento de tokens si es necesario.
+        /// </summary>
+        /// <remarks> 
+        /// No se está usando actualmente pero está para usarlo en diagnósticos.
+        /// </remarks>    
+        private long _lastPredictedToken = -1;
+
 
         public NemotronEngine(ILogger<NemotronEngine> logger)
         {
@@ -43,7 +73,12 @@ namespace VoiceScribe.Core.Engine
         }
 
 
-
+        /// <summary>
+        /// Constructor principal que recibe la ruta de los modelos y un StreamWriter opcional para guardar la transcripción en un archivo.
+        /// </summary>
+        /// <param name="logger"></param>
+        /// <param name="modelFolderPath"></param>
+        /// <param name="fileWriter"></param>
         public NemotronEngine(ILogger<NemotronEngine> logger, string modelFolderPath, StreamWriter? fileWriter)
         {
             _logger = logger;
@@ -53,7 +88,6 @@ namespace VoiceScribe.Core.Engine
             string tokenizerJsonPath = Path.Combine(modelFolderPath, "tokenizer.json");
             Initialize(modelFolderPath, tokenizerJsonPath);
         }
-
 
 
         /// <summary>
@@ -85,7 +119,6 @@ namespace VoiceScribe.Core.Engine
             _logger.LogInformation("Cargando y mapeando el vocabulario desde tokenizer.json...");
             LoadTokenizer(tokenizerJsonPath);
 
-
             var audioProcessorConfigPath = Path.Combine(modelFolderPath, "audio_processor_config.json");
             var genaiConfigPath = Path.Combine(modelFolderPath, "genai_config.json");
 
@@ -95,7 +128,6 @@ namespace VoiceScribe.Core.Engine
                 genaiConfigPath
             );
 
-
             _logger.LogInformation("Allocating streaming architecture tensors...");
             InitializeTensors();
 
@@ -103,10 +135,11 @@ namespace VoiceScribe.Core.Engine
         }
 
 
-
         /// <summary>
         /// Método principal que se acopla directamente al evento DataAvailable de NAudio.
         /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="e"></param>
         public void ProcessAudioChunk(object? sender, WaveInEventArgs e)
         {
             if (_isDisposed || _encoderSession == null) return;
@@ -157,14 +190,14 @@ namespace VoiceScribe.Core.Engine
                 );
 
                 var encoderInputs = new List<NamedOnnxValue>
-        {
-            NamedOnnxValue.CreateFromTensor("audio_signal", audioTensor),
-            NamedOnnxValue.CreateFromTensor("length", lengthTensor),
-            NamedOnnxValue.CreateFromTensor("cache_last_channel", _cacheLastChannel),
-            NamedOnnxValue.CreateFromTensor("cache_last_time", _cacheLastTime),
-            NamedOnnxValue.CreateFromTensor("cache_last_channel_len", _cacheLastChannelLen),
-            NamedOnnxValue.CreateFromTensor("lang_id", langIdTensor)
-        };
+                {
+                    NamedOnnxValue.CreateFromTensor("audio_signal", audioTensor),
+                    NamedOnnxValue.CreateFromTensor("length", lengthTensor),
+                    NamedOnnxValue.CreateFromTensor("cache_last_channel", _cacheLastChannel),
+                    NamedOnnxValue.CreateFromTensor("cache_last_time", _cacheLastTime),
+                    NamedOnnxValue.CreateFromTensor("cache_last_channel_len", _cacheLastChannelLen),
+                    NamedOnnxValue.CreateFromTensor("lang_id", langIdTensor)
+                };
 
                 using var encoderResults = _encoderSession.Run(encoderInputs);
 
@@ -188,7 +221,12 @@ namespace VoiceScribe.Core.Engine
         }
 
 
-
+        /// <summary>
+        /// Decodifica los frames acústicos utilizando el mecanismo RNN-T. Para cada frame, se ejecuta el decoder y el joint para obtener
+        /// el token más probable.
+        /// </summary>
+        /// <param name="acoustic"></param>
+        /// <param name="frameCount"></param>
         private void DecodeRnntFrames(Tensor<float> acoustic, int frameCount)
         {
             for (int t = 0; t < frameCount; t++)
@@ -219,10 +257,10 @@ namespace VoiceScribe.Core.Engine
                     );
 
                     var jointInputs = new List<NamedOnnxValue>
-            {
-                NamedOnnxValue.CreateFromTensor("encoder_output", encFrame),
-                NamedOnnxValue.CreateFromTensor("decoder_output", decOutReshaped)
-            };
+                    {
+                        NamedOnnxValue.CreateFromTensor("encoder_output", encFrame),
+                        NamedOnnxValue.CreateFromTensor("decoder_output", decOutReshaped)
+                    };
 
                     using var jointResults = _jointSession.Run(jointInputs);
 
@@ -245,7 +283,12 @@ namespace VoiceScribe.Core.Engine
         }
 
 
-
+        /// <summary>
+        /// Emite un token reconocido. Primero se limpia el token para eliminar caracteres especiales o de control, luego se imprime en 
+        /// consola y se escribe en el archivo si el StreamWriter está disponible. También se actualiza el último token predicho para 
+        /// mantener el estado del decoder.
+        /// </summary>
+        /// <param name="token"></param>
         private void EmitToken(long token)
         {
             if (!_vocab.TryGetValue(token, out string? text))
@@ -273,6 +316,8 @@ namespace VoiceScribe.Core.Engine
         /// <summary>
         /// Escanea de forma exhaustiva los contratos de entrada y salida del grafo de una sesión ONNX.
         /// </summary>
+        /// <param name="sessionLabel"></param>
+        /// <param name="session"></param>
         private void DiagnoseSessionMetadata(string sessionLabel, InferenceSession session)
         {
             _logger.LogInformation("==================================================");
@@ -295,7 +340,7 @@ namespace VoiceScribe.Core.Engine
                 // CORREGIDO: Usamos ElementDataType para evitar el error CS1061
                 _logger.LogInformation(" -> Name: '{Key}' | Type: {Type} | Dimensions: [{Dims}]",
                     output.Key, output.Value.ElementDataType, dims);
-            }            
+            }
 
             _logger.LogInformation("==================================================\n");
         }
@@ -304,9 +349,11 @@ namespace VoiceScribe.Core.Engine
         /// <summary>
         /// Imprime la anatomía y métricas de activación de un Tensor en tiempo de ejecución.
         /// </summary>
+        /// <param name="tensorLabel"></param>
+        /// <param name="tensor"></param>
         private void DiagnoseTensorOutput(string tensorLabel, Tensor<float> tensor)
         {
-            float[] data = tensor.ToArray();
+            float[] data = [.. tensor];
             float min = float.MaxValue;
             float max = float.MinValue;
             float sum = 0f;
@@ -323,9 +370,12 @@ namespace VoiceScribe.Core.Engine
                 tensorLabel, string.Join(", ", tensor.Dimensions.ToArray()), data.Length, min, max, avg);
         }
 
-        // ====================================================================
-        // MÉTODOS DE INFRAESTRUCTURA DE DATOS INTERNOS
-        // ====================================================================
+
+        /// <summary>
+        /// Inicializa los tensores de caché para la arquitectura de streaming. Estos tensores mantienen el estado entre las inferencias del 
+        /// encoder y el decoder, lo que permite procesar el audio en tiempo real sin perder contexto. Se asignan con las dimensiones y tipos 
+        /// esperados por los modelos ONNX.
+        /// </summary>
         private void InitializeTensors()
         {
             _cacheLastChannel = new DenseTensor<float>(new float[1 * 24 * 56 * 1024], new[] { 1, 24, 56, 1024 });
@@ -341,6 +391,16 @@ namespace VoiceScribe.Core.Engine
         }
 
 
+        /// <summary>
+        /// Carga el vocabulario desde el archivo tokenizer.json y lo mapea a un diccionario de índice a token. El método es robusto para manejar 
+        /// diferentes estructuras de tokenización, como listas de strings, listas de sub-arreglos o listas de objetos con propiedades. 
+        /// Se espera que el archivo tokenizer.json tenga una estructura que incluya un nodo "model" con un sub-nodo "vocab" que contenga la lista
+        /// de tokens. El vocabulario se almacena en un diccionario donde la clave es el índice del token (long) y el valor es el string del token 
+        /// correspondiente.
+        /// Si hay errores al cargar o parsear el archivo, se registrará un error crítico y se lanzará la excepción para evitar continuar con un 
+        /// estado inconsistente.    
+        /// </summary>
+        /// <param name="path"></param>
         private void LoadTokenizer(string path)
         {
             _vocab = new Dictionary<long, string>();
@@ -393,11 +453,11 @@ namespace VoiceScribe.Core.Engine
         }
 
 
-
-
         /// <summary>
         /// Extrae un solo frame acústico del encoder [1, T, 1024] → [1, 1, 1024]
         /// </summary>
+        /// <param name="acousticOutputs"></param>
+        /// <param name="frameIndex"></param>
         private DenseTensor<float> ExtractSingleFrame(Tensor<float> acousticOutputs, int frameIndex)
         {
             var full = acousticOutputs.ToArray();
@@ -408,7 +468,11 @@ namespace VoiceScribe.Core.Engine
         }
 
 
-
+        /// <summary>
+        /// Limpia el token reconocido para eliminar caracteres especiales o de control que no deberían emitirse en la transcripción final.
+        /// </summary>
+        /// <param name="token"></param>
+        /// <returns></returns>
         private string CleanToken(string token)
         {
             if (string.IsNullOrWhiteSpace(token))
@@ -426,6 +490,7 @@ namespace VoiceScribe.Core.Engine
         /// <summary>
         /// Devuelve el índice del valor máximo (ArgMax) en el tensor de logits
         /// </summary>
+        /// <param name="logitsTensor"></param>
         private long ArgMax(Tensor<float> logitsTensor)
         {
             var data = logitsTensor.ToArray();
@@ -446,6 +511,16 @@ namespace VoiceScribe.Core.Engine
         }
 
 
+        /// <summary>
+        /// Actualiza los tensores de caché con los resultados del encoder para mantener el estado entre inferencias en la arquitectura de streaming.
+        /// Estos tensores se pasan como entradas en la siguiente inferencia del encoder para que el modelo pueda mantener el contexto temporal y 
+        /// acústico necesario para el reconocimiento de voz en tiempo real.
+        /// El método extrae los tensores de caché de los resultados del encoder, los convierte a DenseTensor con las dimensiones y tipos correctos, 
+        /// y los asigna a las variables de estado correspondientes en la clase. Esto es crucial para que el modelo de streaming funcione correctamente, 
+        /// ya que sin esta actualización de caché, el modelo perdería el contexto entre los fragmentos de audio y no podría realizar un reconocimiento
+        /// coherente. 
+        /// </summary>
+        /// <param name="encoderResults"></param>
         private void UpdateCache(IDisposableReadOnlyCollection<DisposableNamedOnnxValue> encoderResults)
         {
             var cacheChannelNext = encoderResults.First(x => x.Name == "cache_last_channel_next").AsTensor<float>();
@@ -458,6 +533,12 @@ namespace VoiceScribe.Core.Engine
         }
 
 
+        /// <summary>
+        /// Libera los recursos utilizados por las sesiones de ONNX y el StreamWriter. Es importante llamar a este método cuando se haya terminado
+        ///  de usar el NemotronEngine para asegurar que no haya fugas de memoria o recursos bloqueados.
+        /// El método verifica si ya se ha llamado a Dispose para evitar liberar recursos múltiples veces, lo que podría causar errores.
+        /// Se disponen de las sesiones de ONNX y del StreamWriter, y se marca el estado como dispuesto para prevenir futuras llamadas a este método.
+        /// </summary>
         public void Dispose()
         {
             if (_isDisposed) return;

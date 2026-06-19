@@ -6,6 +6,7 @@ using System.Text.Json;
 
 namespace VoiceScribe.Core.Audio
 {
+    
     public sealed record AudioFeatures(float[] Data, int Frames, int MelBins);
 
     /// <summary>
@@ -69,6 +70,26 @@ namespace VoiceScribe.Core.Audio
         {
         }
 
+        /// <summary>
+        /// Parameters are based on NVIDIA Nemotron 3.5 ASR ONNX metadata and common STFT practices.
+        /// </summary>
+        /// <param name="sampleRate"></param>
+        /// <param name="nFft"></param>
+        /// <param name="hopLength"></param>
+        /// <param name="nMels"></param>
+        /// <param name="windowLength"></param>
+        /// <param name="fMin"></param>
+        /// <param name="fMax"></param>
+        /// <param name="dither"></param>
+        /// <param name="preemphasis"></param>
+        /// <param name="center"></param>
+        /// <param name="logZeroGuardValue"></param>
+        /// <param name="magPower"></param>
+        /// <param name="enableDither"></param>
+        /// <param name="chunkSamples"></param>
+        /// <param name="preEncodeCacheFrames"></param>
+        /// <exception cref="ArgumentOutOfRangeException"></exception>
+        /// <exception cref="ArgumentException"></exception>
         private AudioFeatureExtractor(
             int sampleRate,
             int nFft,
@@ -119,6 +140,15 @@ namespace VoiceScribe.Core.Audio
             _featureCache = new float[PreEncodeCacheFrames * NMels];
         }
 
+
+        /// <summary>
+        /// Creates an AudioFeatureExtractor from JSON config files.
+        /// </summary>
+        /// <param name="audioProcessorConfigPath"></param>
+        /// <param name="genaiConfigPath"></param>
+        /// <param name="enableDither"></param>
+        /// <returns></returns>
+        /// <exception cref="FileNotFoundException"></exception>
         public static AudioFeatureExtractor FromConfig(
             string audioProcessorConfigPath,
             string? genaiConfigPath = null,
@@ -168,6 +198,7 @@ namespace VoiceScribe.Core.Audio
                 preEncodeCacheFrames);
         }
 
+
         /// <summary>
         /// Extracts exactly [PreEncodeCacheFrames + CurrentFramesPerChunk, NMels] features.
         /// For the standard Nemotron 560 ms model this returns [65, 128].
@@ -199,6 +230,7 @@ namespace VoiceScribe.Core.Audio
             return new AudioFeatures(output, TotalFramesPerChunk, NMels);
         }
 
+
         /// <summary>
         /// Same features, but flattened as [n_mels, frames].
         /// Use only if the encoder expects mel-major layout. Nemotron metadata shown so far expects frame-major [1,65,128].
@@ -217,6 +249,10 @@ namespace VoiceScribe.Core.Audio
             return new AudioFeatures(transposed, frameMajor.Frames, frameMajor.MelBins);
         }
 
+
+        /// <summary>
+        /// Clears the pre-encoder feature cache and resets preemphasis state.
+        /// </summary>
         public void ResetStreamingState()
         {
             Array.Clear(_featureCache);
@@ -225,6 +261,13 @@ namespace VoiceScribe.Core.Audio
             _lastRawSample = 0f;
         }
 
+
+        /// <summary>
+        /// Pads or truncates the input PCM to exactly ChunkSamples.
+        /// </summary>
+        /// <param name="pcm"></param>
+        /// <param name="targetSamples"></param>
+        /// <returns></returns>
         private float[] NormalizeChunkLength(float[] pcm, int targetSamples)
         {
             if (pcm.Length == targetSamples)
@@ -235,6 +278,12 @@ namespace VoiceScribe.Core.Audio
             return normalized;
         }
 
+
+        /// <summary>
+        /// Applies optional dithering and preemphasis to the input PCM signal.
+        /// </summary>
+        /// <param name="pcm"></param>
+        /// <returns></returns>
         private float[] ApplyDitherAndPreemphasis(float[] pcm)
         {
             var y = new float[pcm.Length];
@@ -259,6 +308,13 @@ namespace VoiceScribe.Core.Audio
             return y;
         }
 
+
+        /// <summary>
+        /// Extracts log-mel features for the current chunk frames.
+        /// </summary>
+        /// <param name="signal"></param>
+        /// <param name="targetFrames"></param>
+        /// <returns></returns>
         private float[] ExtractCurrentFrames(float[] signal, int targetFrames)
         {
             float[] output = new float[targetFrames * NMels];
@@ -309,6 +365,11 @@ namespace VoiceScribe.Core.Audio
             return output;
         }
 
+
+        /// <summary>
+        /// Updates the pre-encoder feature cache with the most recent frames from the current chunk.
+        /// </summary>
+        /// <param name="currentFeatures"></param>
         private void UpdateFeatureCache(float[] currentFeatures)
         {
             if (PreEncodeCacheFrames == 0)
@@ -330,6 +391,11 @@ namespace VoiceScribe.Core.Audio
             _hasFeatureCache = true;
         }
 
+
+        /// <summary>
+        /// Generates a random number from a standard normal distribution using the Box-Muller transform.
+        /// </summary>
+        /// <returns></returns>
         private float NextGaussian()
         {
             double u1 = 1.0 - _rng.NextDouble();
@@ -337,6 +403,13 @@ namespace VoiceScribe.Core.Audio
             return (float)(Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2));
         }
 
+
+        /// <summary>
+        /// Builds a Hann window of the specified length. For STFT, this is typically the same as window_length, but it will be zero-padded 
+        /// to n_fft length.
+        /// </summary>
+        /// <param name="length"></param>
+        /// <returns></returns>
         private static float[] BuildHann(int length)
         {
             var w = new float[length];
@@ -353,6 +426,14 @@ namespace VoiceScribe.Core.Audio
             return w;
         }
 
+
+        /// <summary>
+        /// Pads or truncates the input window to match the FFT length. The original window is centered within the padded output.
+        /// </summary>
+        /// <param name="window"></param>
+        /// <param name="nFft"></param>
+        /// <returns></returns>
+        /// <exception cref="ArgumentException"></exception>
         private static float[] PadWindowToFft(float[] window, int nFft)
         {
             if (window.Length > nFft)
@@ -364,6 +445,16 @@ namespace VoiceScribe.Core.Audio
             return padded;
         }
 
+
+        /// <summary>
+        /// Builds a Mel filter bank matrix to convert FFT bins to Mel spectrogram features.
+        /// </summary>
+        /// <param name="sampleRate"></param>
+        /// <param name="nFft"></param>
+        /// <param name="nMels"></param>
+        /// <param name="fMin"></param>
+        /// <param name="fMax"></param>
+        /// <returns></returns>
         private static float[][] BuildMelFilterBank(int sampleRate, int nFft, int nMels, float fMin, float fMax)
         {
             int fftBins = nFft / 2 + 1;
@@ -400,6 +491,12 @@ namespace VoiceScribe.Core.Audio
             return weights;
         }
 
+
+        /// <summary>
+        /// Converts a frequency in Hz to the Mel scale using Slaney's formula, which is commonly used in audio processing.
+        /// </summary>
+        /// <param name="hz"></param>
+        /// <returns></returns>
         private static double HzToMelSlaney(double hz)
         {
             const double fSp = 200.0 / 3.0;
@@ -415,6 +512,12 @@ namespace VoiceScribe.Core.Audio
             return mel;
         }
 
+
+        /// <summary>
+        /// Converts a frequency in Mel to Hz using Slaney's formula.
+        /// </summary>
+        /// <param name="mel"></param>
+        /// <returns></returns>
         private static double MelToHzSlaney(double mel)
         {
             const double fSp = 200.0 / 3.0;
@@ -430,6 +533,14 @@ namespace VoiceScribe.Core.Audio
             return hz;
         }
 
+
+        /// <summary>
+        /// Generates a linearly spaced array of values between start and stop, inclusive. Commonly used for creating frequency bins.
+        /// </summary>
+        /// <param name="start"></param>
+        /// <param name="stop"></param>
+        /// <param name="count"></param>
+        /// <returns></returns>
         private static double[] Linspace(double start, double stop, int count)
         {
             var result = new double[count];
@@ -446,6 +557,12 @@ namespace VoiceScribe.Core.Audio
             return result;
         }
 
+
+        /// <summary>
+        /// Performs an in-place Cooley-Tukey FFT on the input buffer. The buffer length must be a power of two.
+        /// </summary>
+        /// <param name="buffer"></param>
+        /// <exception cref="ArgumentException"></exception>
         private static void FftInPlace(Complex[] buffer)
         {
             int n = buffer.Length;
@@ -485,6 +602,15 @@ namespace VoiceScribe.Core.Audio
             }
         }
 
+
+        /// <summary>
+        /// Safely extracts an integer property from a JSON element, with support for both numeric and string representations, 
+        /// and a fallback default value.
+        /// </summary>
+        /// <param name="element"></param>
+        /// <param name="name"></param>
+        /// <param name="fallback"></param>
+        /// <returns></returns>
         private static int GetInt(JsonElement element, string name, int fallback)
         {
             if (!element.TryGetProperty(name, out var p))
@@ -499,6 +625,15 @@ namespace VoiceScribe.Core.Audio
             return fallback;
         }
 
+
+        /// <summary>
+        /// Safely extracts a float property from a JSON element, with support for numeric and string representations, 
+        /// and a fallback default value.
+        /// </summary>
+        /// <param name="element"></param>
+        /// <param name="name"></param>
+        /// <param name="fallback"></param>
+        /// <returns></returns>
         private static float GetFloat(JsonElement element, string name, float fallback)
         {
             if (!element.TryGetProperty(name, out var p))
@@ -518,6 +653,13 @@ namespace VoiceScribe.Core.Audio
             return fallback;
         }
 
+
+        /// <summary>
+        /// Safely extracts a boolean property from a JSON element, with support for boolean and string representations, and a fallback default value.
+        /// </summary> <param name="element"></param>
+        /// <param name="name"></param>
+        /// <param name="fallback"></param>
+        /// <returns></returns>
         private static bool GetBool(JsonElement element, string name, bool fallback)
         {
             if (!element.TryGetProperty(name, out var p))
