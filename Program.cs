@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 using NAudio.Wave;
 
-using speech;
+using VoiceScribe;
 
 class Program
 {

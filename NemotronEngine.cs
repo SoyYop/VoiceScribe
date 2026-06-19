@@ -9,7 +9,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-namespace speech
+namespace VoiceScribe
 {
     public class NemotronEngine : IDisposable
     {
