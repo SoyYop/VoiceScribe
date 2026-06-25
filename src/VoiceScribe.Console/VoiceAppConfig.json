@@ -7,11 +7,11 @@
     "Channels": 1,
     "BufferMilliseconds": 560,
     "SilenceThreshold": 0.003,
-    "ShutdownDrainMilliseconds": 300
+    "QueueCapacity": 8
   },
   "Nemotron": {
     "LanguageId": 101,
-    "MaxSymbolsPerStep": 10,
+    "MaxSymbolsPerStep": null,
     "BlankId": null
   }
 }

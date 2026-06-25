@@ -41,7 +41,7 @@ class Program
     private static StreamWriter? _fileWriter;
 
 
-    static async Task Main(string[] args)
+    static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
         Console.WriteLine("============================================================");
@@ -76,7 +76,7 @@ class Program
         if (config == null)
         {
             engineLogger.LogError("[Error] Failed to load configuration. Exiting.");
-            Environment.Exit(1);
+            return 1;
         }
 
         config.Audio ??= new AudioCaptureOptions();
@@ -85,29 +85,53 @@ class Program
         if (config.ModelFiles == null || config.ModelFiles.Count == 0)
         {
             engineLogger.LogError("[Error] No model files specified in config. Using default list.");
-            Environment.Exit(2);
+            return 2;
         }
 
         if (string.IsNullOrWhiteSpace(config.ModelDownloadsPath))
         {
             engineLogger.LogError($"[Error] Model downloads path set to: {config.ModelDownloadsPath}");
-            Environment.Exit(3);
+            return 3;
         }
 
 
-        if (!await EnsureModelsDownoadedAsync(engineLogger, config))
+        if (!await EnsureModelsDownloadedAsync(engineLogger, config))
         {
             engineLogger.LogError($"[Error] Model files are missing and were not downloaded. Exiting.");
-            Environment.Exit(4);
+            return 4;
         }
 
+        NemotronModelDefinition modelDefinition;
+        try
+        {
+            string modelConfigPath = Path.Combine(
+                config.ModelDownloadsPath,
+                NemotronModelFiles.GenAiConfig);
+            modelDefinition = NemotronModelDefinition.Load(modelConfigPath);
+        }
+        catch (Exception ex)
+        {
+            engineLogger.LogError(ex, "Failed to load Nemotron model definition.");
+            return 5;
+        }
+
+        IReadOnlyList<string> configurationErrors =
+            VoiceAppConfigValidator.Validate(config, modelDefinition);
+        if (configurationErrors.Count > 0)
+        {
+            foreach (string error in configurationErrors)
+                engineLogger.LogError("[Configuration] {Error}", error);
+
+            return 6;
+        }
 
         // Ejecución encapsulada del motor
-        using var engine = new NemotronEngine(
+        await using var engine = new NemotronEngine(
             engineLogger,
             config.ModelDownloadsPath,
             config.Audio,
             config.Nemotron,
+            modelDefinition,
             _fileWriter);
 
         using var waveSource = CreateWaveSource(config.Audio);
@@ -123,12 +147,13 @@ class Program
         waveSource.StartRecording();
         Console.ReadLine();
 
-        // Apagado síncrono e integrado
+        waveSource.DataAvailable -= engine.ProcessAudioChunk;
         waveSource.StopRecording();
-        System.Threading.Thread.Sleep(config.Audio.ShutdownDrainMilliseconds);
+        await engine.StopAsync();
         _fileWriter?.Close();
 
         engineLogger.LogInformation($"[Application] Ending application. Resources released, file closed.");
+        return 0;
     }
 
 
@@ -141,7 +166,7 @@ class Program
     /// <param name="engineLogger"></param>
     /// <param name="config"></param>
     /// <returns></returns>
-    private static async Task<bool> EnsureModelsDownoadedAsync(ILogger<NemotronEngine> engineLogger, VoiceAppConfig config)
+    private static async Task<bool> EnsureModelsDownloadedAsync(ILogger<NemotronEngine> engineLogger, VoiceAppConfig config)
     {
         ModelDownloader md = new(config.RepoUrl, config.ModelDownloadsPath!);
         if (!md.VerifyLocalWeights(config.ModelFiles))
