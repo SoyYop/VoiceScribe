@@ -14,7 +14,7 @@ namespace VoiceScribe.Core.Configuration
         /// <summary>
         /// Maximum number of non-blank symbols emitted for one acoustic frame.
         /// </summary>
-        public int MaxSymbolsPerStep { get; set; } = 10;
+        public int? MaxSymbolsPerStep { get; set; }
 
         /// <summary>
         /// Optional blank token override. When null, the engine uses the final

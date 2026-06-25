@@ -15,7 +15,7 @@ namespace VoiceScribe.Core.Configuration
 
         public float SilenceThreshold { get; set; } = 0.003f;
 
-        public int ShutdownDrainMilliseconds { get; set; } = 300;
+        public int QueueCapacity { get; set; } = 8;
 
         public int SamplesPerBuffer =>
             checked(SampleRate * BufferMilliseconds / 1000);
