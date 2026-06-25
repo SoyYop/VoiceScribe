@@ -27,16 +27,9 @@ class Program
             "..", "..", "..", "..", "..",
             "artifacts", "models", "nemotron-3.5-asr")),
         RepoUrl = "https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4/resolve/main",
-        ModelFiles = [
-            "encoder.onnx",
-            "encoder.onnx.data",
-            "decoder.onnx", "decoder.onnx.data",
-            "joint.onnx", "joint.onnx.data",
-            "tokenizer.json",
-            "genai_config.json",
-            "audio_processor_config.json",
-            "model_config.json"
-        ]
+        ModelFiles = NemotronModelFiles.CreateRequiredFileList(),
+        Audio = new AudioCaptureOptions(),
+        Nemotron = new NemotronModelOptions()
     };
 
 
@@ -86,6 +79,9 @@ class Program
             Environment.Exit(1);
         }
 
+        config.Audio ??= new AudioCaptureOptions();
+        config.Nemotron ??= new NemotronModelOptions();
+
         if (config.ModelFiles == null || config.ModelFiles.Count == 0)
         {
             engineLogger.LogError("[Error] No model files specified in config. Using default list.");
@@ -107,9 +103,14 @@ class Program
 
 
         // Ejecución encapsulada del motor
-        using var engine = new NemotronEngine(engineLogger, config.ModelDownloadsPath, _fileWriter);
+        using var engine = new NemotronEngine(
+            engineLogger,
+            config.ModelDownloadsPath,
+            config.Audio,
+            config.Nemotron,
+            _fileWriter);
 
-        using var waveSource = CreateWaveSource();
+        using var waveSource = CreateWaveSource(config.Audio);
 
         waveSource.DataAvailable += engine.ProcessAudioChunk;
 
@@ -124,7 +125,7 @@ class Program
 
         // Apagado síncrono e integrado
         waveSource.StopRecording();
-        System.Threading.Thread.Sleep(300); // Tiempo de drenaje de tramas pendientes
+        System.Threading.Thread.Sleep(config.Audio.ShutdownDrainMilliseconds);
         _fileWriter?.Close();
 
         engineLogger.LogInformation($"[Application] Ending application. Resources released, file closed.");
@@ -177,15 +178,18 @@ class Program
     /// If no devices are found, it logs an error and exits the application.
     /// </summary>
     /// <returns></returns>
-    private static WaveInEvent CreateWaveSource()
+    private static WaveInEvent CreateWaveSource(AudioCaptureOptions audioOptions)
     {
         int deviceNumber = SelectMicrophoneDeviceNumber();
 
         var waveSource = new WaveInEvent
         {
             DeviceNumber = deviceNumber,
-            WaveFormat = new WaveFormat(16000, 16, 1),
-            BufferMilliseconds = 560
+            WaveFormat = new WaveFormat(
+                audioOptions.SampleRate,
+                audioOptions.BitsPerSample,
+                audioOptions.Channels),
+            BufferMilliseconds = audioOptions.BufferMilliseconds
         };
 
         return waveSource;

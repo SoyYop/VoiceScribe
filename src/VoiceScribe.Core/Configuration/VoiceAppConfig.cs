@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using VoiceScribe.Core.ModelAssets;
 
 namespace VoiceScribe.Core.Configuration
 {
@@ -21,13 +22,23 @@ namespace VoiceScribe.Core.Configuration
         /// <summary>
         /// List of model files required for the application. This should include the names of the files that the ModelDownloader will check for and download if missing. If not specified, it defaults to a predefined list of expected model files.
         /// </summary>
-        public List<string> ModelFiles {get;set;} = [];
+        public List<string> ModelFiles { get; set; } = NemotronModelFiles.CreateRequiredFileList();
 
 
         /// <summary>
         /// URL of the repository where the model files can be downloaded from. This should point to a valid location where the ModelDownloader can access the required files. If not specified, it defaults to a predefined URL.
         /// </summary>
         public string RepoUrl { get; set; } = "";
+
+        /// <summary>
+        /// Audio capture and silence filtering settings.
+        /// </summary>
+        public AudioCaptureOptions Audio { get; set; } = new();
+
+        /// <summary>
+        /// Nemotron inference and RNN-T decoding settings.
+        /// </summary>
+        public NemotronModelOptions Nemotron { get; set; } = new();
 
 
         /// <summary>

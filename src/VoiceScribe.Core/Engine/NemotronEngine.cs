@@ -5,6 +5,8 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 using NAudio.Wave;
 
 using VoiceScribe.Core.Audio;
+using VoiceScribe.Core.Configuration;
+using VoiceScribe.Core.ModelAssets;
 
 
 /// <summary>
@@ -19,6 +21,8 @@ namespace VoiceScribe.Core.Engine
     public class NemotronEngine : IDisposable
     {
         private readonly ILogger<NemotronEngine> _logger;
+        private readonly AudioCaptureOptions _audioOptions;
+        private readonly NemotronModelOptions _modelOptions;
 
         private StreamWriter? _fileWriter;
 
@@ -52,10 +56,6 @@ namespace VoiceScribe.Core.Engine
         private AudioFeatureExtractor _featureExtractor = null!;
 
 
-        // Constantes para el proceso de decodificación RNN-T
-        private const long BlankId = 13087;
-        private const int MaxSymbolsPerStep = 10;
-
         /// <summary>
         /// Último token predicho por el modelo. Se utiliza para mantener el estado del decoder y evitar emitir tokens repetidos o no deseados. 
         /// Este campo se actualiza cada vez que se emite un token reconocido, y se puede utilizar para implementar lógica adicional de filtrado o
@@ -70,6 +70,8 @@ namespace VoiceScribe.Core.Engine
         public NemotronEngine(ILogger<NemotronEngine> logger)
         {
             _logger = logger;
+            _audioOptions = new AudioCaptureOptions();
+            _modelOptions = new NemotronModelOptions();
         }
 
 
@@ -79,13 +81,20 @@ namespace VoiceScribe.Core.Engine
         /// <param name="logger"></param>
         /// <param name="modelFolderPath"></param>
         /// <param name="fileWriter"></param>
-        public NemotronEngine(ILogger<NemotronEngine> logger, string modelFolderPath, StreamWriter? fileWriter)
+        public NemotronEngine(
+            ILogger<NemotronEngine> logger,
+            string modelFolderPath,
+            AudioCaptureOptions audioOptions,
+            NemotronModelOptions modelOptions,
+            StreamWriter? fileWriter)
         {
             _logger = logger;
+            _audioOptions = audioOptions;
+            _modelOptions = modelOptions;
             _fileWriter = fileWriter; // Asignamos el escritor que viene desde Main
 
             // Calculamos de forma automática la ruta del tokenizador e inicializamos el grafo
-            string tokenizerJsonPath = Path.Combine(modelFolderPath, "tokenizer.json");
+            string tokenizerJsonPath = Path.Combine(modelFolderPath, NemotronModelFiles.Tokenizer);
             Initialize(modelFolderPath, tokenizerJsonPath);
         }
 
@@ -97,9 +106,9 @@ namespace VoiceScribe.Core.Engine
         {
             _logger.LogInformation("Bootstrapping ONNX Execution Runtimes...");
 
-            var encoderPath = Path.Combine(modelFolderPath, "encoder.onnx");
-            var decoderPath = Path.Combine(modelFolderPath, "decoder.onnx");
-            var jointPath = Path.Combine(modelFolderPath, "joint.onnx");
+            var encoderPath = Path.Combine(modelFolderPath, NemotronModelFiles.Encoder);
+            var decoderPath = Path.Combine(modelFolderPath, NemotronModelFiles.Decoder);
+            var jointPath = Path.Combine(modelFolderPath, NemotronModelFiles.Joint);
 
             var sessionOptions = new SessionOptions
             {
@@ -119,8 +128,8 @@ namespace VoiceScribe.Core.Engine
             _logger.LogInformation("Cargando y mapeando el vocabulario desde tokenizer.json...");
             LoadTokenizer(tokenizerJsonPath);
 
-            var audioProcessorConfigPath = Path.Combine(modelFolderPath, "audio_processor_config.json");
-            var genaiConfigPath = Path.Combine(modelFolderPath, "genai_config.json");
+            var audioProcessorConfigPath = Path.Combine(modelFolderPath, NemotronModelFiles.AudioProcessorConfig);
+            var genaiConfigPath = Path.Combine(modelFolderPath, NemotronModelFiles.GenAiConfig);
 
             _logger.LogInformation("Inicializando extractor acústico desde {Path}", audioProcessorConfigPath);
             _featureExtractor = AudioFeatureExtractor.FromConfig(
@@ -146,9 +155,13 @@ namespace VoiceScribe.Core.Engine
 
             try
             {
-                const int expectedSamples = 8960;
+                int expectedSamples = _audioOptions.SamplesPerBuffer;
 
-                if (e.BytesRecorded < expectedSamples * 2)
+                int bytesPerSample = _audioOptions.BitsPerSample / 8;
+                int bytesPerFrame = bytesPerSample * _audioOptions.Channels;
+                int expectedBytes = expectedSamples * bytesPerFrame;
+
+                if (e.BytesRecorded < expectedBytes)
                     return;
 
                 float[] pcmChunk = new float[expectedSamples];
@@ -156,14 +169,14 @@ namespace VoiceScribe.Core.Engine
 
                 for (int i = 0; i < expectedSamples; i++)
                 {
-                    short pcm = BitConverter.ToInt16(e.Buffer, i * 2);
-                    float sample = pcm / 32768f;
+                    int sampleOffset = i * bytesPerFrame;
+                    float sample = ReadPcmSample(e.Buffer, sampleOffset, _audioOptions.BitsPerSample);
 
                     pcmChunk[i] = sample;
                     maxAmp = Math.Max(maxAmp, Math.Abs(sample));
                 }
 
-                if (maxAmp < 0.003f)
+                if (maxAmp < _audioOptions.SilenceThreshold)
                     return;
 
                 // IMPORTANTE:
@@ -185,7 +198,7 @@ namespace VoiceScribe.Core.Engine
                 );
 
                 var langIdTensor = new DenseTensor<long>(
-                    new long[] { 101 },
+                    new long[] { _modelOptions.LanguageId },
                     new[] { 1 }
                 );
 
@@ -220,6 +233,33 @@ namespace VoiceScribe.Core.Engine
             }
         }
 
+        /// <summary>
+        /// Reads the first channel of an integer PCM frame and normalizes it to [-1, 1].
+        /// </summary>
+        private static float ReadPcmSample(byte[] buffer, int offset, int bitsPerSample)
+        {
+            return bitsPerSample switch
+            {
+                8 => (buffer[offset] - 128) / 128f,
+                16 => BitConverter.ToInt16(buffer, offset) / 32768f,
+                24 => ReadPcm24(buffer, offset) / 8388608f,
+                32 => BitConverter.ToInt32(buffer, offset) / 2147483648f,
+                _ => throw new NotSupportedException(
+                    $"PCM bit depth '{bitsPerSample}' is not supported. Use 8, 16, 24 or 32 bits.")
+            };
+        }
+
+        private static int ReadPcm24(byte[] buffer, int offset)
+        {
+            int sample = buffer[offset]
+                | buffer[offset + 1] << 8
+                | buffer[offset + 2] << 16;
+
+            return (sample & 0x00800000) != 0
+                ? sample | unchecked((int)0xFF000000)
+                : sample;
+        }
+
 
         /// <summary>
         /// Decodifica los frames acústicos utilizando el mecanismo RNN-T. Para cada frame, se ejecuta el decoder y el joint para obtener
@@ -233,7 +273,7 @@ namespace VoiceScribe.Core.Engine
             {
                 var encFrame = ExtractSingleFrame(acoustic, t);
 
-                for (int u = 0; u < MaxSymbolsPerStep; u++)
+                for (int u = 0; u < _modelOptions.MaxSymbolsPerStep; u++)
                 {
                     var decInputs = new List<NamedOnnxValue>
             {
@@ -251,9 +291,10 @@ namespace VoiceScribe.Core.Engine
                     var hOut = decResults.First(x => x.Name == "h_out").AsTensor<float>();
                     var cOut = decResults.First(x => x.Name == "c_out").AsTensor<float>();
 
+                    int decoderEmbeddingSize = checked((int)decOutTensor.Length);
                     var decOutReshaped = new DenseTensor<float>(
                         decOutTensor.ToArray(),
-                        new[] { 1, 1, 640 }
+                        new[] { 1, 1, decoderEmbeddingSize }
                     );
 
                     var jointInputs = new List<NamedOnnxValue>
@@ -270,16 +311,31 @@ namespace VoiceScribe.Core.Engine
 
                     long token = ArgMax(jointOut);
 
-                    if (token == BlankId)
+                    long blankId = ResolveBlankId(jointOut);
+                    if (token == blankId)
                         break;
 
                     _decoderHIn = new DenseTensor<float>(hOut.ToArray(), hOut.Dimensions.ToArray());
                     _decoderCIn = new DenseTensor<float>(cOut.ToArray(), cOut.Dimensions.ToArray());
-                    _decoderTargets = new DenseTensor<long>(new long[] { token }, new[] { 1, 1 });
+                    _decoderTargets = new DenseTensor<long>(
+                        new long[] { token },
+                        _decoderTargets.Dimensions.ToArray());
 
                     EmitToken(token);
                 }
             }
+        }
+
+        private long ResolveBlankId(Tensor<float> jointOutput)
+        {
+            int classCount = jointOutput.Dimensions[^1];
+            long blankId = _modelOptions.BlankId ?? classCount - 1;
+
+            if (blankId < 0 || blankId >= classCount)
+                throw new InvalidOperationException(
+                    $"Blank token ID '{blankId}' is outside the joint output range [0, {classCount - 1}].");
+
+            return blankId;
         }
 
 
@@ -378,16 +434,79 @@ namespace VoiceScribe.Core.Engine
         /// </summary>
         private void InitializeTensors()
         {
-            _cacheLastChannel = new DenseTensor<float>(new float[1 * 24 * 56 * 1024], new[] { 1, 24, 56, 1024 });
-            _cacheLastTime = new DenseTensor<float>(new float[1 * 24 * 1024 * 8], new[] { 1, 24, 1024, 8 });
-            _cacheLastChannelLen = new DenseTensor<long>(new long[] { 0 }, new[] { 1 });
+            int[] cacheChannelDimensions = GetRequiredInputDimensions(
+                _encoderSession,
+                "cache_last_channel");
+            int[] cacheTimeDimensions = GetRequiredInputDimensions(
+                _encoderSession,
+                "cache_last_time");
+            int[] cacheLengthDimensions = GetRequiredInputDimensions(
+                _encoderSession,
+                "cache_last_channel_len");
+            int[] decoderTargetDimensions = GetRequiredInputDimensions(
+                _decoderSession,
+                "targets");
+            int[] decoderHiddenDimensions = GetRequiredInputDimensions(
+                _decoderSession,
+                "h_in");
+            int[] decoderCellDimensions = GetRequiredInputDimensions(
+                _decoderSession,
+                "c_in");
 
-            // Estados del decoder - más robusto
-            _decoderTargets = new DenseTensor<long>(new long[] { 0 }, new[] { 1, 1 });
-            _decoderHIn = new DenseTensor<float>(new float[2 * 1 * 640], new[] { 2, 1, 640 });
-            _decoderCIn = new DenseTensor<float>(new float[2 * 1 * 640], new[] { 2, 1, 640 });
+            _cacheLastChannel = new DenseTensor<float>(
+                new float[GetElementCount(cacheChannelDimensions)],
+                cacheChannelDimensions);
+            _cacheLastTime = new DenseTensor<float>(
+                new float[GetElementCount(cacheTimeDimensions)],
+                cacheTimeDimensions);
+            _cacheLastChannelLen = new DenseTensor<long>(
+                new long[GetElementCount(cacheLengthDimensions)],
+                cacheLengthDimensions);
+
+            _decoderTargets = new DenseTensor<long>(
+                new long[GetElementCount(decoderTargetDimensions)],
+                decoderTargetDimensions);
+            _decoderHIn = new DenseTensor<float>(
+                new float[GetElementCount(decoderHiddenDimensions)],
+                decoderHiddenDimensions);
+            _decoderCIn = new DenseTensor<float>(
+                new float[GetElementCount(decoderCellDimensions)],
+                decoderCellDimensions);
 
             _lastPredictedToken = 0;
+        }
+
+        private static int[] GetRequiredInputDimensions(
+            InferenceSession session,
+            string inputName)
+        {
+            if (!session.InputMetadata.TryGetValue(inputName, out NodeMetadata? metadata))
+                throw new InvalidOperationException(
+                    $"Required ONNX input '{inputName}' was not found.");
+
+            int[] dimensions = metadata.Dimensions.ToArray();
+            if (dimensions.Length == 0)
+                throw new InvalidOperationException(
+                    $"Required ONNX input '{inputName}' has no tensor dimensions.");
+
+            for (int i = 0; i < dimensions.Length; i++)
+            {
+                if (dimensions[i] <= 0)
+                    // Streaming inference starts with one batch item and one
+                    // sequence/state item for every symbolic ONNX dimension.
+                    dimensions[i] = 1;
+            }
+
+            return dimensions;
+        }
+
+        private static int GetElementCount(int[] dimensions)
+        {
+            int count = 1;
+            foreach (int dimension in dimensions)
+                count = checked(count * dimension);
+
+            return count;
         }
 
 
@@ -460,11 +579,12 @@ namespace VoiceScribe.Core.Engine
         /// <param name="frameIndex"></param>
         private DenseTensor<float> ExtractSingleFrame(Tensor<float> acousticOutputs, int frameIndex)
         {
+            int embeddingSize = acousticOutputs.Dimensions[^1];
             var full = acousticOutputs.ToArray();
-            float[] frame = new float[1024];
-            int offset = frameIndex * 1024;
-            Array.Copy(full, offset, frame, 0, 1024);
-            return new DenseTensor<float>(frame, new[] { 1, 1, 1024 });
+            float[] frame = new float[embeddingSize];
+            int offset = frameIndex * embeddingSize;
+            Array.Copy(full, offset, frame, 0, embeddingSize);
+            return new DenseTensor<float>(frame, new[] { 1, 1, embeddingSize });
         }
 
 

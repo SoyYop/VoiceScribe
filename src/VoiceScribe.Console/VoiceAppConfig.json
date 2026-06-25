@@ -1,14 +1,17 @@
 {
   "ModelDownloadsPath": "C:/Fuentes/AI/VoiceScribe/artifacts/models/nemotron-3.5-asr",
   "RepoUrl": "https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4/resolve/main",
-  "ModelFiles": [
-        "encoder.onnx", 
-        "encoder.onnx.data", 
-        "decoder.onnx", "decoder.onnx.data",
-        "joint.onnx", "joint.onnx.data",
-        "tokenizer.json",
-        "genai_config.json",
-        "audio_processor_config.json",
-        "model_config.json"
-    ]
+  "Audio": {
+    "SampleRate": 16000,
+    "BitsPerSample": 16,
+    "Channels": 1,
+    "BufferMilliseconds": 560,
+    "SilenceThreshold": 0.003,
+    "ShutdownDrainMilliseconds": 300
+  },
+  "Nemotron": {
+    "LanguageId": 101,
+    "MaxSymbolsPerStep": 10,
+    "BlankId": null
+  }
 }
