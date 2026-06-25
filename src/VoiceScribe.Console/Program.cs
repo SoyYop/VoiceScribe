@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 
 using NAudio.Wave;
 
+using VoiceScribe.Console.Audio;
 using VoiceScribe.Core.Configuration;
 using VoiceScribe.Core.Engine;
 using VoiceScribe.Core.ModelAssets;
@@ -125,18 +126,52 @@ class Program
             return 6;
         }
 
-        // Ejecución encapsulada del motor
+        IReadOnlyList<AudioInputDevice> audioDevices = ConsoleAudioInput.GetDevices();
+        if (audioDevices.Count == 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("[Audio] No input microphones found.");
+            Console.ResetColor();
+            return 10;
+        }
+
+        using var shutdownCts = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            shutdownCts.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        Task<NemotronEngine>? engineLoadTask = null;
+
         try
         {
-            await using var engine = new NemotronEngine(
-                engineLogger,
-                config.ModelDownloadsPath,
-                config.Audio,
-                config.Nemotron,
-                modelDefinition,
-                _fileWriter);
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("[Model] Loading ONNX models in background...");
+            Console.ResetColor();
 
-            using var waveSource = CreateWaveSource(config.Audio);
+            engineLoadTask = Task.Run(
+                () => new NemotronEngine(
+                    engineLogger,
+                    config.ModelDownloadsPath,
+                    config.Audio,
+                    config.Nemotron,
+                    modelDefinition,
+                    _fileWriter));
+
+            int deviceNumber = ConsoleAudioInput.SelectDeviceNumber(
+                audioDevices,
+                shutdownCts.Token);
+            await using NemotronEngine engine =
+                await engineLoadTask.ConfigureAwait(false);
+            shutdownCts.Token.ThrowIfCancellationRequested();
+
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("[Model] ONNX models ready.");
+            Console.ResetColor();
+
+            using WaveInEvent waveSource =
+                ConsoleAudioInput.CreateWaveSource(deviceNumber, config.Audio);
 
             waveSource.DataAvailable += engine.ProcessAudioChunk;
 
@@ -147,17 +182,44 @@ class Program
             engineLogger.LogInformation("[Application] Starting audio capture and processing loop.");
 
             waveSource.StartRecording();
-            Console.ReadLine();
+            try
+            {
+                await Console.In.ReadLineAsync(shutdownCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                engineLogger.LogInformation(
+                    "[Application] Cancellation requested.");
+            }
 
             waveSource.DataAvailable -= engine.ProcessAudioChunk;
             waveSource.StopRecording();
-            await engine.StopAsync();
+            await engine.StopAsync(shutdownCts.Token);
 
             engineLogger.LogInformation("[Application] Ending application. Resources released.");
             return 0;
         }
+        catch (OperationCanceledException)
+        {
+            if (engineLoadTask != null)
+            {
+                try
+                {
+                    await using NemotronEngine loadedEngine =
+                        await engineLoadTask.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The original cancellation result is returned below.
+                }
+            }
+
+            engineLogger.LogInformation("[Application] Shutdown cancelled.");
+            return 130;
+        }
         finally
         {
+            Console.CancelKeyPress -= cancelHandler;
             if (_fileWriter != null)
                 await _fileWriter.DisposeAsync();
         }
@@ -188,9 +250,32 @@ class Program
             {
                 Console.WriteLine();
 
+                using var downloadCts = new CancellationTokenSource();
+                ConsoleCancelEventHandler cancelDownload = (_, eventArgs) =>
+                {
+                    eventArgs.Cancel = true;
+                    downloadCts.Cancel();
+                };
+                Console.CancelKeyPress += cancelDownload;
+
                 using var httpClient = new HttpClient();
-                await md.HandleModelDownload(httpClient, config.ModelFiles);
-                engineLogger.LogInformation($"[Config] Model files downloaded.");
+                try
+                {
+                    await md.HandleModelDownload(
+                        httpClient,
+                        config.ModelFiles,
+                        downloadCts.Token);
+                    engineLogger.LogInformation("[Config] Model files downloaded.");
+                }
+                catch (OperationCanceledException)
+                {
+                    engineLogger.LogWarning("[Config] Model download cancelled.");
+                    return false;
+                }
+                finally
+                {
+                    Console.CancelKeyPress -= cancelDownload;
+                }
             }
             else
             {
@@ -200,100 +285,6 @@ class Program
 
         }
         return true;
-    }
-
-
-    /// <summary>
-    /// Creates and configures a WaveInEvent audio source for capturing microphone input. It first checks the available audio input devices
-    /// and prompts the user to select one if multiple devices are found. The selected device is then configured with a sample rate of 16 kHz,
-    /// 16-bit depth, mono channel, and a buffer size of 560 milliseconds to optimize for real-time processing with the Nemotron engine. 
-    /// If no devices are found, it logs an error and exits the application.
-    /// </summary>
-    /// <returns></returns>
-    private static WaveInEvent CreateWaveSource(AudioCaptureOptions audioOptions)
-    {
-        int deviceNumber = SelectMicrophoneDeviceNumber();
-
-        var waveSource = new WaveInEvent
-        {
-            DeviceNumber = deviceNumber,
-            WaveFormat = new WaveFormat(
-                audioOptions.SampleRate,
-                audioOptions.BitsPerSample,
-                audioOptions.Channels),
-            BufferMilliseconds = audioOptions.BufferMilliseconds
-        };
-
-        return waveSource;
-    }
-
-
-    /// <summary>
-    /// Prompts the user to select an audio input device if multiple microphones are detected. It lists all available devices with their names
-    /// and channel counts, and validates the user's selection to ensure it corresponds to a valid device number. 
-    /// If only one device is found, it is automatically selected. If no devices are found, it logs an error and exits the application.
-    /// The method returns the selected device number for use in configuring the audio source.
-    /// </summary>
-    /// <returns>Input device ID</returns>
-    private static int SelectMicrophoneDeviceNumber()
-    {
-        int deviceCount = WaveIn.DeviceCount;
-
-        if (deviceCount == 0)
-        {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("[Audio] No input microphones found.");
-            Console.ResetColor();
-
-            Environment.Exit(10);
-        }
-
-        if (deviceCount == 1)
-        {
-            var onlyDevice = WaveIn.GetCapabilities(0);
-
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"[Audio] Microphone selected: 0 - {onlyDevice.ProductName}");
-            Console.ResetColor();
-
-            return 0;
-        }
-
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("\n[Audio] Multiple input microphones found:");
-        Console.ResetColor();
-
-        for (int i = 0; i < deviceCount; i++)
-        {
-            var device = WaveIn.GetCapabilities(i);
-            Console.WriteLine($"  {i}: {device.ProductName} - Channels: {device.Channels}");
-        }
-
-        while (true)
-        {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.Write("\nSelect microphone number: ");
-            Console.ResetColor();
-
-            string? input = Console.ReadLine();
-
-            if (int.TryParse(input, out int selectedDevice)
-                && selectedDevice >= 0
-                && selectedDevice < deviceCount)
-            {
-                var device = WaveIn.GetCapabilities(selectedDevice);
-
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"[Audio] Microphone selected: {selectedDevice} - {device.ProductName}");
-                Console.ResetColor();
-
-                return selectedDevice;
-            }
-
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("[Audio] Invalid microphone number. Try again.");
-            Console.ResetColor();
-        }
     }
 
 }

@@ -84,6 +84,8 @@ La cola debe ser acotada. Si se llena, la política actual es descartar el fragm
 
 Las sesiones ONNX y los estados del decoder/encoder no deben utilizarse simultáneamente desde varios threads sin introducir sincronización y pruebas específicas.
 
+El worker acepta cancelación. El apagado normal completa y drena la cola; una cancelación explícita puede interrumpir el trabajo pendiente después de finalizar la inferencia síncrona que ya esté en curso.
+
 ## Formas de tensores ONNX
 
 Las dimensiones dinámicas de ONNX suelen aparecer como `-1`. No todas significan lo mismo y no deben convertirse globalmente a `1`.
@@ -139,9 +141,13 @@ Los estados `h_in` y `c_in` deben ser de rango 3 y coincidir con:
 
 Sus siguientes valores se obtienen de `h_out` y `c_out` después de emitir un token no blank.
 
+Los tensores persistentes `h_in` y `c_in` deben reutilizarse. Los valores de salida se copian sobre sus buffers; no se deben recrear ambos tensores por cada token.
+
 ### Cachés del encoder
 
 Las cachés iniciales se crean desde la metadata ONNX y se validan contra el tamaño oculto del encoder. Después de cada ejecución deben reemplazarse usando las salidas `cache_*_next` declaradas en el contrato.
+
+Los objetos tensor de caché deben conservarse durante la sesión. Se actualizan sus buffers para evitar asignaciones de gran tamaño por cada bloque.
 
 ## Decodificación RNN-T
 
@@ -178,6 +184,17 @@ El orden de apagado debe ser:
 No se debe reintroducir `Thread.Sleep` como mecanismo de drenaje.
 
 `StopAsync` y `DisposeAsync` deben permanecer idempotentes. No deben aceptar audio después de completar la cola.
+
+La descarga de modelos también debe propagar `CancellationToken`. Una descarga cancelada o fallida no debe dejar un archivo parcial que pueda superar posteriormente una verificación basada solo en existencia.
+
+## Inicio concurrente
+
+La carga de sesiones ONNX puede ejecutarse en segundo plano mientras el usuario selecciona el micrófono. Deben cumplirse estas condiciones:
+
+- La definición y configuración del modelo ya fueron validadas.
+- La captura no comienza hasta que la selección y la carga hayan terminado.
+- Si se cancela la selección, cualquier motor que termine de cargarse debe ser dispuesto.
+- Los errores de carga deben observarse y propagarse antes de iniciar la captura.
 
 ## Propiedad de recursos
 

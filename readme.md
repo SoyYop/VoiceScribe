@@ -81,6 +81,8 @@ Una vez cargado el modelo:
 2. Habla con claridad.
 3. Presiona `Enter` para detener la captura.
 
+Las sesiones ONNX se cargan en segundo plano mientras se muestra y procesa la selección del micrófono. La captura comienza únicamente cuando ambas operaciones han finalizado.
+
 ## Guardar la transcripción
 
 El primer argumento de la aplicación se interpreta como el archivo de salida. El contenido se agrega al final si el archivo ya existe.
@@ -90,6 +92,8 @@ dotnet run --project src/VoiceScribe.Console -- transcripcion.txt
 ```
 
 La salida se escribe progresivamente y se vacía después de procesar cada bloque de audio.
+
+`Ctrl+C` solicita cancelación durante la descarga de modelos, la espera de entrada y el procesamiento de la cola. El apagado mediante `Enter` conserva el drenaje normal de los bloques pendientes.
 
 ## Compilación
 
@@ -152,6 +156,8 @@ Tokenizer -> consola / archivo
 - Un canal.
 - Búferes de 560 ms.
 
+La enumeración, selección y creación del dispositivo de entrada están aisladas en `ConsoleAudioInput`, fuera del flujo principal de `Program`.
+
 El callback `DataAvailable` no ejecuta inferencia. Copia los bytes recibidos a una cola acotada y retorna. Un único worker acumula los fragmentos hasta completar exactamente las muestras requeridas por el modelo y luego ejecuta el pipeline ONNX. Si la cola alcanza su capacidad, el bloque nuevo se descarta y se registra una advertencia.
 
 `AudioFeatureExtractor` aplica:
@@ -179,6 +185,8 @@ Antes de crear las sesiones, la aplicación carga `genai_config.json` como contr
 La decodificación es greedy. Si `Nemotron.MaxSymbolsPerStep` o `Nemotron.BlankId` son `null`, se utilizan `max_symbols_per_step` y `blank_id` declarados por el modelo.
 
 Las dimensiones de cachés y estados recurrentes se obtienen desde `InputMetadata` y se validan contra `genai_config.json`. Solo los ejes dinámicos de los tensores de estado inicial se resuelven con tamaño uno.
+
+Los buffers de caché del encoder y los estados LSTM del decoder se conservan durante toda la sesión. Cada inferencia copia los valores nuevos sobre esos buffers sin recrear sus tensores.
 
 ### Tokenización
 

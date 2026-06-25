@@ -30,16 +30,24 @@ namespace VoiceScribe.Core.ModelAssets
         /// </summary>
         /// <param name="modelFiles">List of files to download from the HuggingFace repository.</param>
         /// <returns></returns>
-        public async Task HandleModelDownload(HttpClient httpClient, IEnumerable<string> modelFiles)
+        public async Task HandleModelDownload(
+            HttpClient httpClient,
+            IEnumerable<string> modelFiles,
+            CancellationToken cancellationToken = default)
         {
             Directory.CreateDirectory(_modelFolder);
             Console.WriteLine("\nStarting automated download loop...");
 
             foreach (var file in modelFiles)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 string fileUrl = $"{_repoUrl}/{file}";
                 Console.WriteLine($"\nFetching: {file}");
-                await DownloadWithProgress(httpClient, fileUrl, file);
+                await DownloadWithProgress(
+                    httpClient,
+                    fileUrl,
+                    file,
+                    cancellationToken: cancellationToken);
             }
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine("\n[Success] All streaming assets downloaded successfully.");
@@ -54,7 +62,12 @@ namespace VoiceScribe.Core.ModelAssets
         /// <param name="fileName"></param>
         /// <param name="overwrite"></param>
         /// <returns></returns>
-        private async Task DownloadWithProgress(HttpClient httpClient, string url, string fileName, bool overwrite = false)
+        private async Task DownloadWithProgress(
+            HttpClient httpClient,
+            string url,
+            string fileName,
+            bool overwrite = false,
+            CancellationToken cancellationToken = default)
         {
             string destinationPath = Path.Combine(_modelFolder, fileName);
 
@@ -73,30 +86,49 @@ namespace VoiceScribe.Core.ModelAssets
             ;
 
 
-            using (var response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+            try
             {
-                response.EnsureSuccessStatusCode();
-                long? totalBytes = response.Content.Headers.ContentLength;
-
-                using (var downloadStream = await response.Content.ReadAsStreamAsync())
-                using (var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true))
+                using (var response = await httpClient.GetAsync(
+                    url,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken))
                 {
-                    var buffer = new byte[8192];
-                    long totalReadBytes = 0;
-                    int readBytes;
+                    response.EnsureSuccessStatusCode();
+                    long? totalBytes = response.Content.Headers.ContentLength;
 
-                    while ((readBytes = await downloadStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                    using (var downloadStream =
+                        await response.Content.ReadAsStreamAsync(cancellationToken))
+                    using (var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true))
                     {
-                        await fileStream.WriteAsync(buffer, 0, readBytes);
-                        totalReadBytes += readBytes;
+                        var buffer = new byte[8192];
+                        long totalReadBytes = 0;
+                        int readBytes;
 
-                        if (totalBytes.HasValue)
+                        while ((readBytes = await downloadStream.ReadAsync(
+                            buffer.AsMemory(),
+                            cancellationToken)) > 0)
                         {
-                            double progressPercentage = (double)totalReadBytes / totalBytes.Value * 100;
-                            DrawProgressBar(progressPercentage);
+                            await fileStream.WriteAsync(
+                                buffer.AsMemory(0, readBytes),
+                                cancellationToken);
+                            totalReadBytes += readBytes;
+
+                            if (totalBytes.HasValue)
+                            {
+                                double progressPercentage =
+                                    (double)totalReadBytes / totalBytes.Value * 100;
+                                DrawProgressBar(progressPercentage);
+                            }
                         }
                     }
                 }
+            }
+            catch
+            {
+                if (File.Exists(destinationPath))
+                    File.Delete(destinationPath);
+
+                throw;
             }
         }
 

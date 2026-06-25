@@ -27,6 +27,7 @@ namespace VoiceScribe.Core.Engine
         private readonly NemotronModelDefinition _modelDefinition;
         private readonly Channel<byte[]> _audioQueue;
         private readonly Task _audioWorker;
+        private readonly CancellationTokenSource _workerCancellation = new();
 
         private readonly TextWriter? _transcriptWriter;
 
@@ -106,11 +107,13 @@ namespace VoiceScribe.Core.Engine
                         SingleReader = true,
                         SingleWriter = false
                     });
-                _audioWorker = Task.Run(ProcessAudioQueueAsync);
+                _audioWorker = Task.Run(
+                    () => ProcessAudioQueueAsync(_workerCancellation.Token));
             }
             catch
             {
                 DisposeSessions();
+                _workerCancellation.Dispose();
                 throw;
             }
         }
@@ -184,7 +187,8 @@ namespace VoiceScribe.Core.Engine
             }
         }
 
-        private async Task ProcessAudioQueueAsync()
+        private async Task ProcessAudioQueueAsync(
+            CancellationToken cancellationToken)
         {
             int bytesPerSample = _audioOptions.BitsPerSample / 8;
             int bytesPerFrame = bytesPerSample * _audioOptions.Channels;
@@ -193,26 +197,52 @@ namespace VoiceScribe.Core.Engine
             float[] pcmChunk = new float[_modelDefinition.ChunkSamples];
             int bufferedBytes = 0;
 
-            await foreach (byte[] audioBytes in _audioQueue.Reader.ReadAllAsync())
+            try
             {
-                if (pending.Length < bufferedBytes + audioBytes.Length)
-                    Array.Resize(ref pending, Math.Max(pending.Length * 2, bufferedBytes + audioBytes.Length));
-
-                Buffer.BlockCopy(audioBytes, 0, pending, bufferedBytes, audioBytes.Length);
-                bufferedBytes += audioBytes.Length;
-
-                int offset = 0;
-                while (bufferedBytes - offset >= expectedBytes)
+                await foreach (byte[] audioBytes in
+                    _audioQueue.Reader.ReadAllAsync(cancellationToken))
                 {
-                    ProcessPcmChunk(pending, offset, bytesPerFrame, pcmChunk);
-                    offset += expectedBytes;
-                }
+                    if (pending.Length < bufferedBytes + audioBytes.Length)
+                    {
+                        Array.Resize(
+                            ref pending,
+                            Math.Max(
+                                pending.Length * 2,
+                                bufferedBytes + audioBytes.Length));
+                    }
 
-                if (offset > 0)
-                {
-                    bufferedBytes -= offset;
-                    Buffer.BlockCopy(pending, offset, pending, 0, bufferedBytes);
+                    Buffer.BlockCopy(
+                        audioBytes,
+                        0,
+                        pending,
+                        bufferedBytes,
+                        audioBytes.Length);
+                    bufferedBytes += audioBytes.Length;
+
+                    int offset = 0;
+                    while (bufferedBytes - offset >= expectedBytes)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        ProcessPcmChunk(pending, offset, bytesPerFrame, pcmChunk);
+                        offset += expectedBytes;
+                    }
+
+                    if (offset > 0)
+                    {
+                        bufferedBytes -= offset;
+                        Buffer.BlockCopy(
+                            pending,
+                            offset,
+                            pending,
+                            0,
+                            bufferedBytes);
+                    }
                 }
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("Audio inference worker cancelled.");
             }
         }
 
@@ -393,8 +423,8 @@ namespace VoiceScribe.Core.Engine
                     if (token == blankId)
                         break;
 
-                    _decoderHIn = new DenseTensor<float>(hOut.ToArray(), hOut.Dimensions.ToArray());
-                    _decoderCIn = new DenseTensor<float>(cOut.ToArray(), cOut.Dimensions.ToArray());
+                    CopyTensorValues(hOut, _decoderHIn, "decoder hidden state");
+                    CopyTensorValues(cOut, _decoderCIn, "decoder cell state");
                     _decoderTargets[0, 0] = token;
 
                     EmitToken(token);
@@ -910,9 +940,18 @@ namespace VoiceScribe.Core.Engine
                 .First(x => x.Name == _modelDefinition.Encoder.CacheLastChannelLengthOutput)
                 .AsTensor<long>();
 
-            _cacheLastChannel = new DenseTensor<float>(cacheChannelNext.ToArray(), cacheChannelNext.Dimensions.ToArray());
-            _cacheLastTime = new DenseTensor<float>(cacheTimeNext.ToArray(), cacheTimeNext.Dimensions.ToArray());
-            _cacheLastChannelLen = new DenseTensor<long>(cacheLenNext.ToArray(), cacheLenNext.Dimensions.ToArray());
+            CopyTensorValues(
+                cacheChannelNext,
+                _cacheLastChannel,
+                "encoder channel cache");
+            CopyTensorValues(
+                cacheTimeNext,
+                _cacheLastTime,
+                "encoder time cache");
+            CopyTensorValues(
+                cacheLenNext,
+                _cacheLastChannelLen,
+                "encoder cache length");
         }
 
 
@@ -922,13 +961,27 @@ namespace VoiceScribe.Core.Engine
         /// El método verifica si ya se ha llamado a Dispose para evitar liberar recursos múltiples veces, lo que podría causar errores.
         /// Se disponen de las sesiones de ONNX y del StreamWriter, y se marca el estado como dispuesto para prevenir futuras llamadas a este método.
         /// </summary>
-        public async Task StopAsync()
+        public async Task StopAsync(
+            CancellationToken cancellationToken = default)
         {
-            if (Interlocked.Exchange(ref _queueCompleted, 1) != 0)
-                return;
+            bool firstStop =
+                Interlocked.Exchange(ref _queueCompleted, 1) == 0;
+            if (firstStop)
+                _audioQueue.Writer.TryComplete();
 
-            _audioQueue.Writer.TryComplete();
-            await _audioWorker.ConfigureAwait(false);
+            try
+            {
+                await _audioWorker
+                    .WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                _workerCancellation.Cancel();
+                await _audioWorker.ConfigureAwait(false);
+                throw;
+            }
         }
 
         public void Dispose()
@@ -942,6 +995,7 @@ namespace VoiceScribe.Core.Engine
             }
 
             DisposeSessions();
+            _workerCancellation.Dispose();
             _isDisposed = true;
         }
 
@@ -957,6 +1011,26 @@ namespace VoiceScribe.Core.Engine
             _encoderSession?.Dispose();
             _decoderSession?.Dispose();
             _jointSession?.Dispose();
+        }
+
+        private static void CopyTensorValues<T>(
+            Tensor<T> source,
+            DenseTensor<T> destination,
+            string stateName)
+        {
+            if (source.Length != destination.Length ||
+                !source.Dimensions.SequenceEqual(destination.Dimensions))
+            {
+                throw new InvalidOperationException(
+                    $"The {stateName} shape changed from " +
+                    $"[{string.Join(", ", destination.Dimensions.ToArray())}] to " +
+                    $"[{string.Join(", ", source.Dimensions.ToArray())}].");
+            }
+
+            Span<T> destinationValues = destination.Buffer.Span;
+            int index = 0;
+            foreach (T value in source)
+                destinationValues[index++] = value;
         }
     }
 }
