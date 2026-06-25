@@ -126,34 +126,41 @@ class Program
         }
 
         // Ejecución encapsulada del motor
-        await using var engine = new NemotronEngine(
-            engineLogger,
-            config.ModelDownloadsPath,
-            config.Audio,
-            config.Nemotron,
-            modelDefinition,
-            _fileWriter);
+        try
+        {
+            await using var engine = new NemotronEngine(
+                engineLogger,
+                config.ModelDownloadsPath,
+                config.Audio,
+                config.Nemotron,
+                modelDefinition,
+                _fileWriter);
 
-        using var waveSource = CreateWaveSource(config.Audio);
+            using var waveSource = CreateWaveSource(config.Audio);
 
-        waveSource.DataAvailable += engine.ProcessAudioChunk;
+            waveSource.DataAvailable += engine.ProcessAudioChunk;
 
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("\n>>> Microphones active. Speak clearly. Press [ENTER] to exit pipeline <<<\n");
-        Console.ResetColor();
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine("\n>>> Microphones active. Speak clearly. Press [ENTER] to exit pipeline <<<\n");
+            Console.ResetColor();
 
-        engineLogger.LogInformation($"[Application] Starting audio capture and processing loop.");
+            engineLogger.LogInformation("[Application] Starting audio capture and processing loop.");
 
-        waveSource.StartRecording();
-        Console.ReadLine();
+            waveSource.StartRecording();
+            Console.ReadLine();
 
-        waveSource.DataAvailable -= engine.ProcessAudioChunk;
-        waveSource.StopRecording();
-        await engine.StopAsync();
-        _fileWriter?.Close();
+            waveSource.DataAvailable -= engine.ProcessAudioChunk;
+            waveSource.StopRecording();
+            await engine.StopAsync();
 
-        engineLogger.LogInformation($"[Application] Ending application. Resources released, file closed.");
-        return 0;
+            engineLogger.LogInformation("[Application] Ending application. Resources released.");
+            return 0;
+        }
+        finally
+        {
+            if (_fileWriter != null)
+                await _fileWriter.DisposeAsync();
+        }
     }
 
 

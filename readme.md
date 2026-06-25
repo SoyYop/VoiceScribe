@@ -4,6 +4,8 @@ VoiceScribe es un prototipo de transcripción de voz en tiempo real para Windows
 
 La aplicación captura audio desde un micrófono, genera características log-mel localmente y ejecuta un pipeline RNN-T compuesto por encoder, decoder y joint. La inferencia se realiza en la máquina local mediante ONNX Runtime; la conexión a Internet solo es necesaria para descargar los archivos del modelo si todavía no existen.
 
+Las invariantes que deben preservarse al modificar audio, tensores ONNX, concurrencia o decodificación están documentadas en [constraints.md](constraints.md). Debe revisarse antes de realizar cambios en esas áreas.
+
 ## Estado actual
 
 - Compila correctamente con .NET 10.
@@ -13,7 +15,7 @@ La aplicación captura audio desde un micrófono, genera características log-me
 - Decodifica tokens de forma greedy mediante el pipeline RNN-T.
 - Escribe la transcripción en consola y, opcionalmente, en un archivo.
 - Descarga automáticamente los archivos faltantes desde Hugging Face, previa confirmación.
-- No incluye actualmente pruebas automatizadas.
+- Incluye pruebas automatizadas para contrato del modelo, configuración, formas de estado ONNX y extracción de características.
 
 ## Requisitos
 
@@ -95,12 +97,19 @@ La salida se escribe progresivamente y se vacía después de procesar cada bloqu
 dotnet build VoiceScribe.sln
 ```
 
-La solución contiene dos proyectos:
+Ejecutar las pruebas:
+
+```powershell
+dotnet test VoiceScribe.sln
+```
+
+La solución contiene tres proyectos:
 
 | Proyecto | Responsabilidad |
 | --- | --- |
 | `VoiceScribe.Console` | Inicio de la aplicación, logging, selección de micrófono, captura de audio, configuración y descarga del modelo. |
 | `VoiceScribe.Core` | Extracción de características, administración de modelos ONNX, cachés de streaming y decodificación RNN-T. |
+| `VoiceScribe.Core.Tests` | Pruebas del contrato Nemotron, validación, estados dinámicos y extractor acústico. |
 
 ## Arquitectura
 
@@ -257,7 +266,7 @@ Las versiones exactas se encuentran en los archivos `.csproj`.
 - Se omiten bloques cuyo pico de amplitud sea inferior a `0.003`.
 - No hay beam search, timestamps, separación por hablante, puntuación de confianza ni segmentación formal de frases.
 - El nivel de logging predeterminado es `Warning`; los diagnósticos `Information` y `Debug` no aparecen sin modificar la configuración del logger.
-- No existe todavía una suite de pruebas automatizadas ni validación comparativa del preprocesamiento frente a la implementación original del modelo.
+- No existe todavía una validación comparativa del preprocesamiento frente a la implementación original del modelo ni una prueba automatizada integral con los tres grafos ONNX.
 
 ## Solución de problemas
 

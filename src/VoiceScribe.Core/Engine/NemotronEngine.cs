@@ -28,7 +28,7 @@ namespace VoiceScribe.Core.Engine
         private readonly Channel<byte[]> _audioQueue;
         private readonly Task _audioWorker;
 
-        private StreamWriter? _fileWriter;
+        private readonly TextWriter? _transcriptWriter;
 
         private bool _isDisposed;
         private int _queueCompleted;
@@ -84,26 +84,35 @@ namespace VoiceScribe.Core.Engine
             AudioCaptureOptions audioOptions,
             NemotronModelOptions modelOptions,
             NemotronModelDefinition modelDefinition,
-            StreamWriter? fileWriter)
+            TextWriter? transcriptWriter)
         {
             _logger = logger;
             _audioOptions = audioOptions;
             _modelOptions = modelOptions;
             _modelDefinition = modelDefinition;
-            _fileWriter = fileWriter; // Asignamos el escritor que viene desde Main
+            _transcriptWriter = transcriptWriter;
 
-            // Calculamos de forma automática la ruta del tokenizador e inicializamos el grafo
-            string tokenizerJsonPath = Path.Combine(modelFolderPath, NemotronModelFiles.Tokenizer);
-            Initialize(modelFolderPath, tokenizerJsonPath);
+            try
+            {
+                string tokenizerJsonPath = Path.Combine(
+                    modelFolderPath,
+                    NemotronModelFiles.Tokenizer);
+                Initialize(modelFolderPath, tokenizerJsonPath);
 
-            _audioQueue = Channel.CreateBounded<byte[]>(
-                new BoundedChannelOptions(_audioOptions.QueueCapacity)
-                {
-                    FullMode = BoundedChannelFullMode.Wait,
-                    SingleReader = true,
-                    SingleWriter = false
-                });
-            _audioWorker = Task.Run(ProcessAudioQueueAsync);
+                _audioQueue = Channel.CreateBounded<byte[]>(
+                    new BoundedChannelOptions(_audioOptions.QueueCapacity)
+                    {
+                        FullMode = BoundedChannelFullMode.Wait,
+                        SingleReader = true,
+                        SingleWriter = false
+                    });
+                _audioWorker = Task.Run(ProcessAudioQueueAsync);
+            }
+            catch
+            {
+                DisposeSessions();
+                throw;
+            }
         }
 
 
@@ -118,7 +127,7 @@ namespace VoiceScribe.Core.Engine
             var decoderPath = Path.Combine(modelFolderPath, _modelDefinition.Decoder.FileName);
             var jointPath = Path.Combine(modelFolderPath, _modelDefinition.Joiner.FileName);
 
-            var sessionOptions = new SessionOptions
+            using var sessionOptions = new SessionOptions
             {
                 GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
                 ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
@@ -127,6 +136,8 @@ namespace VoiceScribe.Core.Engine
             _encoderSession = new InferenceSession(encoderPath, sessionOptions);
             _decoderSession = new InferenceSession(decoderPath, sessionOptions);
             _jointSession = new InferenceSession(jointPath, sessionOptions);
+
+            ValidateSessionContracts();
 
             // Ejecución de los nuevos diagnósticos reutilizables antes de abrir micrófonos
             DiagnoseSessionMetadata("ENCODER", _encoderSession);
@@ -179,6 +190,7 @@ namespace VoiceScribe.Core.Engine
             int bytesPerFrame = bytesPerSample * _audioOptions.Channels;
             int expectedBytes = _modelDefinition.ChunkSamples * bytesPerFrame;
             byte[] pending = new byte[expectedBytes * 2];
+            float[] pcmChunk = new float[_modelDefinition.ChunkSamples];
             int bufferedBytes = 0;
 
             await foreach (byte[] audioBytes in _audioQueue.Reader.ReadAllAsync())
@@ -192,7 +204,7 @@ namespace VoiceScribe.Core.Engine
                 int offset = 0;
                 while (bufferedBytes - offset >= expectedBytes)
                 {
-                    ProcessPcmChunk(pending, offset, bytesPerFrame);
+                    ProcessPcmChunk(pending, offset, bytesPerFrame, pcmChunk);
                     offset += expectedBytes;
                 }
 
@@ -204,12 +216,15 @@ namespace VoiceScribe.Core.Engine
             }
         }
 
-        private void ProcessPcmChunk(byte[] buffer, int bufferOffset, int bytesPerFrame)
+        private void ProcessPcmChunk(
+            byte[] buffer,
+            int bufferOffset,
+            int bytesPerFrame,
+            float[] pcmChunk)
         {
             try
             {
                 int expectedSamples = _modelDefinition.ChunkSamples;
-                float[] pcmChunk = new float[expectedSamples];
                 float maxAmp = 0f;
 
                 for (int i = 0; i < expectedSamples; i++)
@@ -269,7 +284,7 @@ namespace VoiceScribe.Core.Engine
 
                 DecodeRnntFrames(acoustic, T);
 
-                _fileWriter?.Flush();
+                _transcriptWriter?.Flush();
             }
             catch (Exception ex)
             {
@@ -313,9 +328,19 @@ namespace VoiceScribe.Core.Engine
         /// <param name="frameCount"></param>
         private void DecodeRnntFrames(Tensor<float> acoustic, int frameCount)
         {
+            int encoderEmbeddingSize = acoustic.Dimensions[^1];
+            if (encoderEmbeddingSize != _modelDefinition.EncoderHiddenSize)
+                throw new InvalidOperationException(
+                    $"Encoder produced embedding size {encoderEmbeddingSize}; expected {_modelDefinition.EncoderHiddenSize}.");
+
+            float[] encoderFrameBuffer = new float[encoderEmbeddingSize];
+            var encoderFrame = new DenseTensor<float>(
+                encoderFrameBuffer,
+                new[] { 1, 1, encoderEmbeddingSize });
+
             for (int t = 0; t < frameCount; t++)
             {
-                var encFrame = ExtractSingleFrame(acoustic, t);
+                CopySingleFrame(acoustic, t, encoderFrameBuffer);
 
                 int maxSymbolsPerStep =
                     _modelOptions.MaxSymbolsPerStep ?? _modelDefinition.MaxSymbolsPerStep;
@@ -347,14 +372,12 @@ namespace VoiceScribe.Core.Engine
                         throw new InvalidOperationException(
                             $"Decoder produced {decoderEmbeddingSize} values for one step; expected {_modelDefinition.DecoderHiddenSize}.");
 
-                    var decOutReshaped = new DenseTensor<float>(
-                        decOutTensor.ToArray(),
-                        new[] { 1, 1, decoderEmbeddingSize }
-                    );
+                    Tensor<float> decOutReshaped = decOutTensor.Reshape(
+                        new[] { 1, 1, decoderEmbeddingSize });
 
                     var jointInputs = new List<NamedOnnxValue>
                     {
-                        NamedOnnxValue.CreateFromTensor(_modelDefinition.Joiner.EncoderOutputInput, encFrame),
+                        NamedOnnxValue.CreateFromTensor(_modelDefinition.Joiner.EncoderOutputInput, encoderFrame),
                         NamedOnnxValue.CreateFromTensor(_modelDefinition.Joiner.DecoderOutputInput, decOutReshaped)
                     };
 
@@ -372,9 +395,7 @@ namespace VoiceScribe.Core.Engine
 
                     _decoderHIn = new DenseTensor<float>(hOut.ToArray(), hOut.Dimensions.ToArray());
                     _decoderCIn = new DenseTensor<float>(cOut.ToArray(), cOut.Dimensions.ToArray());
-                    _decoderTargets = new DenseTensor<long>(
-                        new long[] { token },
-                        _decoderTargets.Dimensions.ToArray());
+                    _decoderTargets[0, 0] = token;
 
                     EmitToken(token);
                 }
@@ -411,7 +432,7 @@ namespace VoiceScribe.Core.Engine
                 return;
 
             Console.Write(clean);
-            _fileWriter?.Write(clean);
+            _transcriptWriter?.Write(clean);
 
             _logger.LogDebug("Emitido: '{Clean}' (Token: {Token})", clean, token);
 
@@ -454,6 +475,141 @@ namespace VoiceScribe.Core.Engine
             }
 
             _logger.LogInformation("==================================================\n");
+        }
+
+        private void ValidateSessionContracts()
+        {
+            ValidateSessionContract(
+                "encoder",
+                _encoderSession,
+                [
+                    _modelDefinition.Encoder.AudioFeaturesInput,
+                    _modelDefinition.Encoder.InputLengthsInput,
+                    _modelDefinition.Encoder.CacheLastChannelInput,
+                    _modelDefinition.Encoder.CacheLastTimeInput,
+                    _modelDefinition.Encoder.CacheLastChannelLengthInput,
+                    _modelDefinition.Encoder.LanguageIdInput
+                ],
+                [
+                    _modelDefinition.Encoder.EncoderOutputsOutput,
+                    _modelDefinition.Encoder.CacheLastChannelOutput,
+                    _modelDefinition.Encoder.CacheLastTimeOutput,
+                    _modelDefinition.Encoder.CacheLastChannelLengthOutput
+                ]);
+            ValidateNodeTypes(
+                "encoder",
+                _encoderSession,
+                new Dictionary<string, TensorElementType>
+                {
+                    [_modelDefinition.Encoder.AudioFeaturesInput] = TensorElementType.Float,
+                    [_modelDefinition.Encoder.InputLengthsInput] = TensorElementType.Int64,
+                    [_modelDefinition.Encoder.CacheLastChannelInput] = TensorElementType.Float,
+                    [_modelDefinition.Encoder.CacheLastTimeInput] = TensorElementType.Float,
+                    [_modelDefinition.Encoder.CacheLastChannelLengthInput] = TensorElementType.Int64,
+                    [_modelDefinition.Encoder.LanguageIdInput] = TensorElementType.Int64
+                },
+                new Dictionary<string, TensorElementType>
+                {
+                    [_modelDefinition.Encoder.EncoderOutputsOutput] = TensorElementType.Float,
+                    [_modelDefinition.Encoder.CacheLastChannelOutput] = TensorElementType.Float,
+                    [_modelDefinition.Encoder.CacheLastTimeOutput] = TensorElementType.Float,
+                    [_modelDefinition.Encoder.CacheLastChannelLengthOutput] = TensorElementType.Int64
+                });
+
+            ValidateSessionContract(
+                "decoder",
+                _decoderSession,
+                [
+                    _modelDefinition.Decoder.TargetsInput,
+                    _modelDefinition.Decoder.HiddenStateInput,
+                    _modelDefinition.Decoder.CellStateInput
+                ],
+                [
+                    _modelDefinition.Decoder.DecoderOutput,
+                    _modelDefinition.Decoder.HiddenStateOutput,
+                    _modelDefinition.Decoder.CellStateOutput
+                ]);
+            ValidateNodeTypes(
+                "decoder",
+                _decoderSession,
+                new Dictionary<string, TensorElementType>
+                {
+                    [_modelDefinition.Decoder.TargetsInput] = TensorElementType.Int64,
+                    [_modelDefinition.Decoder.HiddenStateInput] = TensorElementType.Float,
+                    [_modelDefinition.Decoder.CellStateInput] = TensorElementType.Float
+                },
+                new Dictionary<string, TensorElementType>
+                {
+                    [_modelDefinition.Decoder.DecoderOutput] = TensorElementType.Float,
+                    [_modelDefinition.Decoder.HiddenStateOutput] = TensorElementType.Float,
+                    [_modelDefinition.Decoder.CellStateOutput] = TensorElementType.Float
+                });
+
+            ValidateSessionContract(
+                "joiner",
+                _jointSession,
+                [
+                    _modelDefinition.Joiner.EncoderOutputInput,
+                    _modelDefinition.Joiner.DecoderOutputInput
+                ],
+                [_modelDefinition.Joiner.LogitsOutput]);
+            ValidateNodeTypes(
+                "joiner",
+                _jointSession,
+                new Dictionary<string, TensorElementType>
+                {
+                    [_modelDefinition.Joiner.EncoderOutputInput] = TensorElementType.Float,
+                    [_modelDefinition.Joiner.DecoderOutputInput] = TensorElementType.Float
+                },
+                new Dictionary<string, TensorElementType>
+                {
+                    [_modelDefinition.Joiner.LogitsOutput] = TensorElementType.Float
+                });
+        }
+
+        private static void ValidateSessionContract(
+            string sessionName,
+            InferenceSession session,
+            IEnumerable<string> requiredInputs,
+            IEnumerable<string> requiredOutputs)
+        {
+            string[] missingInputs = requiredInputs
+                .Where(name => !session.InputMetadata.ContainsKey(name))
+                .ToArray();
+            string[] missingOutputs = requiredOutputs
+                .Where(name => !session.OutputMetadata.ContainsKey(name))
+                .ToArray();
+
+            if (missingInputs.Length == 0 && missingOutputs.Length == 0)
+                return;
+
+            throw new InvalidOperationException(
+                $"The {sessionName} ONNX graph does not match genai_config.json. " +
+                $"Missing inputs: [{string.Join(", ", missingInputs)}]. " +
+                $"Missing outputs: [{string.Join(", ", missingOutputs)}].");
+        }
+
+        private static void ValidateNodeTypes(
+            string sessionName,
+            InferenceSession session,
+            IReadOnlyDictionary<string, TensorElementType> expectedInputs,
+            IReadOnlyDictionary<string, TensorElementType> expectedOutputs)
+        {
+            foreach ((string name, TensorElementType expectedType) in expectedInputs)
+            {
+                TensorElementType actualType = session.InputMetadata[name].ElementDataType;
+                if (actualType != expectedType)
+                    throw new InvalidOperationException(
+                        $"The {sessionName} input '{name}' has type {actualType}; expected {expectedType}.");
+            }
+
+            foreach ((string name, TensorElementType expectedType) in expectedOutputs)
+            {
+                TensorElementType actualType = session.OutputMetadata[name].ElementDataType;
+                if (actualType != expectedType)
+                    throw new InvalidOperationException(
+                        $"The {sessionName} output '{name}' has type {actualType}; expected {expectedType}.");
+            }
         }
 
 
@@ -546,20 +702,11 @@ namespace VoiceScribe.Core.Engine
                 throw new InvalidOperationException(
                     $"Required ONNX input '{inputName}' was not found.");
 
-            int[] dimensions = metadata.Dimensions.ToArray();
-            if (dimensions.Length == 0)
-                throw new InvalidOperationException(
-                    $"Required ONNX input '{inputName}' has no tensor dimensions.");
-
-            for (int i = 0; i < dimensions.Length; i++)
-            {
-                if (dimensions[i] <= 0)
-                    // These calls are restricted to initial streaming state
-                    // tensors. Dynamic batch/sequence axes start at one.
-                    dimensions[i] = 1;
-            }
-
-            return dimensions;
+            // These calls are restricted to initial streaming state tensors.
+            // Dynamic batch/sequence axes start at one.
+            return OnnxStateShape.ResolveInitialDimensions(
+                metadata.Dimensions,
+                inputName);
         }
 
         private void ValidateInitialStateDimensions(
@@ -675,22 +822,23 @@ namespace VoiceScribe.Core.Engine
 
 
         /// <summary>
-        /// Extrae un solo frame acústico del encoder [1, T, 1024] → [1, 1, 1024]
+        /// Copies one acoustic frame from [1, T, D] into a reusable D-sized buffer.
         /// </summary>
         /// <param name="acousticOutputs"></param>
         /// <param name="frameIndex"></param>
-        private DenseTensor<float> ExtractSingleFrame(Tensor<float> acousticOutputs, int frameIndex)
+        private static void CopySingleFrame(
+            Tensor<float> acousticOutputs,
+            int frameIndex,
+            float[] destination)
         {
             int embeddingSize = acousticOutputs.Dimensions[^1];
-            if (embeddingSize != _modelDefinition.EncoderHiddenSize)
-                throw new InvalidOperationException(
-                    $"Encoder produced embedding size {embeddingSize}; expected {_modelDefinition.EncoderHiddenSize}.");
+            if (destination.Length != embeddingSize)
+                throw new ArgumentException(
+                    "Destination length must match the encoder embedding size.",
+                    nameof(destination));
 
-            var full = acousticOutputs.ToArray();
-            float[] frame = new float[embeddingSize];
-            int offset = frameIndex * embeddingSize;
-            Array.Copy(full, offset, frame, 0, embeddingSize);
-            return new DenseTensor<float>(frame, new[] { 1, 1, embeddingSize });
+            for (int i = 0; i < embeddingSize; i++)
+                destination[i] = acousticOutputs[0, frameIndex, i];
         }
 
 
@@ -717,23 +865,26 @@ namespace VoiceScribe.Core.Engine
         /// Devuelve el índice del valor máximo (ArgMax) en el tensor de logits
         /// </summary>
         /// <param name="logitsTensor"></param>
-        private long ArgMax(Tensor<float> logitsTensor)
+        private static long ArgMax(Tensor<float> logitsTensor)
         {
-            var data = logitsTensor.ToArray();
-            if (data.Length == 0) return 0;
-
+            bool hasValues = false;
             long maxIndex = 0;
-            float maxValue = data[0];
+            long index = 0;
+            float maxValue = float.NegativeInfinity;
 
-            for (int i = 1; i < data.Length; i++)
+            foreach (float value in logitsTensor)
             {
-                if (data[i] > maxValue)
+                hasValues = true;
+                if (value > maxValue)
                 {
-                    maxValue = data[i];
-                    maxIndex = i;
+                    maxValue = value;
+                    maxIndex = index;
                 }
+
+                index++;
             }
-            return maxIndex;
+
+            return hasValues ? maxIndex : 0;
         }
 
 
@@ -790,10 +941,7 @@ namespace VoiceScribe.Core.Engine
                 Interlocked.Exchange(ref _queueCompleted, 1);
             }
 
-            _fileWriter?.Dispose();
-            _encoderSession?.Dispose();
-            _decoderSession?.Dispose();
-            _jointSession?.Dispose();
+            DisposeSessions();
             _isDisposed = true;
         }
 
@@ -802,6 +950,13 @@ namespace VoiceScribe.Core.Engine
             if (_isDisposed) return;
             await StopAsync().ConfigureAwait(false);
             Dispose();
+        }
+
+        private void DisposeSessions()
+        {
+            _encoderSession?.Dispose();
+            _decoderSession?.Dispose();
+            _jointSession?.Dispose();
         }
     }
 }
