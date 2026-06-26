@@ -57,6 +57,7 @@ Ejemplo:
     "ExecutionProvider": "Cpu",
     "DeviceId": 0,
     "GpuMemoryLimitMiB": null,
+    "AllowCpuFallback": true,
     "EnableProfiling": false
   },
   "Nemotron": {
@@ -74,6 +75,17 @@ Ejecutar la aplicación:
 ```powershell
 dotnet run --project src/VoiceScribe.Console
 ```
+
+La variante DirectML usa una distribución nativa diferente de ONNX Runtime. Para compilarla y ejecutarla:
+
+```powershell
+dotnet restore src/VoiceScribe.Console/VoiceScribe.Console.csproj -p:OnnxRuntimeFlavor=DirectMl
+dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=DirectMl
+```
+
+También se debe establecer `"ExecutionProvider": "DirectMl"` en `VoiceAppConfig.json`. La variante DirectML usa `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4; la variante CPU continúa usando ONNX Runtime 1.27.0.
+
+Con la exportación INT4 actual, decoder y joint crean sesiones DirectML, pero el encoder falla al inicializar el proveedor. Con `AllowCpuFallback: true`, el encoder se recrea explícitamente en CPU y se registra una advertencia. Por ello, esta modalidad es actualmente híbrida.
 
 Si faltan archivos del modelo, la aplicación solicitará autorización para descargarlos:
 
@@ -219,9 +231,10 @@ El archivo `VoiceAppConfig.json` se copia al directorio de salida al compilar.
 | `Audio.BufferMilliseconds` | Duración de cada bloque de captura. |
 | `Audio.SilenceThreshold` | Pico mínimo normalizado para procesar un bloque. |
 | `Audio.QueueCapacity` | Número máximo de fragmentos pendientes de inferencia. |
-| `Inference.ExecutionProvider` | Proveedor ONNX solicitado: `Cpu`, `DirectMl` o `Cuda`. La variante actual solo incluye CPU. |
+| `Inference.ExecutionProvider` | Proveedor ONNX solicitado: `Cpu`, `DirectMl` o `Cuda`. Debe estar incluido en la variante compilada. |
 | `Inference.DeviceId` | Identificador del dispositivo para proveedores GPU. |
 | `Inference.GpuMemoryLimitMiB` | Límite opcional de VRAM. Se ignora en CPU. |
+| `Inference.AllowCpuFallback` | Permite recrear en CPU una sesión GPU que no pueda inicializarse. |
 | `Inference.EnableProfiling` | Activa el perfil de ONNX Runtime. |
 | `Nemotron.LanguageId` | Identificador de idioma enviado al encoder; valor predeterminado: `101`. |
 | `Nemotron.MaxSymbolsPerStep` | Sobrescritura opcional del máximo de tokens por frame. Con `null`, se usa el contrato del modelo. |

@@ -64,17 +64,19 @@ La base común para los tres modos ya está implementada:
 - `OnnxExecutionProvider` declara `Cpu`, `DirectMl` y `Cuda`.
 - `IOnnxSessionFactory` se inyecta en `NemotronEngine`.
 - `CpuOnnxSessionFactory` conserva el comportamiento actual.
-- La variante CPU rechaza explícitamente DirectML y CUDA.
+- `DirectMlOnnxSessionFactory` está disponible al compilar con `OnnxRuntimeFlavor=DirectMl`.
+- La variante CPU rechaza DirectML y CUDA; la variante DirectML rechaza CUDA.
 
-Queda pendiente crear y empaquetar las fábricas DirectML y CUDA como variantes separadas del ejecutable.
+La prueba con los modelos reales detectó que decoder y joint cargan en DirectML, pero el encoder INT4 falla durante la inicialización con `E_INVALIDARG`. Si `AllowCpuFallback` está activo, solo esa sesión se recrea en CPU y el modo queda híbrido. Queda pendiente la variante CUDA y medir si acelerar decoder/joint compensa las transferencias.
 
 ### 1. Dependencia nativa
 
 En `VoiceScribe.Core.csproj`:
 
-- Sustituir `Microsoft.ML.OnnxRuntime` por `Microsoft.ML.OnnxRuntime.Gpu` 1.27.0.
-- No referenciar simultáneamente ambos paquetes, ya que exponen el mismo ensamblado administrado.
-- Documentar CUDA 12.x, cuDNN 9.x, el runtime de Visual C++ y las rutas de DLL requeridas por ONNX Runtime 1.27.
+- La variante CPU selecciona `Microsoft.ML.OnnxRuntime` 1.27.0.
+- La variante DirectML selecciona `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4, última versión publicada de ese paquete.
+- La futura variante CUDA deberá seleccionar `Microsoft.ML.OnnxRuntime.Gpu` sin combinar distribuciones nativas.
+- Se debe documentar CUDA, cuDNN, el runtime de Visual C++ y las rutas de DLL requeridas por la versión CUDA elegida.
 
 Antes de implementarlo se debe confirmar la matriz exacta de compatibilidad de la versión restaurada. No conviene actualizar ONNX Runtime al mismo tiempo que se introduce CUDA.
 

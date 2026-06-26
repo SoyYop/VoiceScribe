@@ -23,22 +23,52 @@ public sealed class OnnxSessionFactoryResolverTests
         Assert.Equal(OnnxExecutionProvider.Cpu, factory.ExecutionProvider);
     }
 
-    [Theory]
-    [InlineData(OnnxExecutionProvider.DirectMl)]
-    [InlineData(OnnxExecutionProvider.Cuda)]
-    public void Create_RejectsProviderUnavailableInCpuVariant(
-        OnnxExecutionProvider provider)
+    [Fact]
+    public void Create_HandlesDirectMlAccordingToRuntimeVariant()
     {
         var options = new OnnxRuntimeOptions
         {
-            ExecutionProvider = provider
+            ExecutionProvider = OnnxExecutionProvider.DirectMl
         };
 
-        NotSupportedException exception = Assert.Throws<NotSupportedException>(
-            () => OnnxSessionFactoryResolver.Create(
+        if (OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
+        {
+            IOnnxSessionFactory factory =
+                OnnxSessionFactoryResolver.Create(
+                    options,
+                    NullLogger.Instance);
+
+            Assert.Equal(
+                OnnxExecutionProvider.DirectMl,
+                factory.ExecutionProvider);
+            Assert.Equal("DirectMlOnnxSessionFactory", factory.GetType().Name);
+        }
+        else
+        {
+            NotSupportedException exception =
+                Assert.Throws<NotSupportedException>(
+                    () => OnnxSessionFactoryResolver.Create(
+                        options,
+                        NullLogger.Instance));
+
+            Assert.Contains("runtime variant", exception.Message);
+        }
+    }
+
+    [Fact]
+    public void Create_RejectsCudaUntilCudaVariantExists()
+    {
+        var options = new OnnxRuntimeOptions
+        {
+            ExecutionProvider = OnnxExecutionProvider.Cuda
+        };
+
+        NotSupportedException exception =
+            Assert.Throws<NotSupportedException>(
+                () => OnnxSessionFactoryResolver.Create(
                 options,
                 NullLogger.Instance));
 
-        Assert.Contains("CPU runtime variant", exception.Message);
+        Assert.Contains("runtime variant", exception.Message);
     }
 }

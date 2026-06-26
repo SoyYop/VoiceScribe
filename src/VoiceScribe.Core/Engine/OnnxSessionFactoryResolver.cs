@@ -19,8 +19,13 @@ public static class OnnxSessionFactoryResolver
         {
             OnnxExecutionProvider.Cpu =>
                 new CpuOnnxSessionFactory(logger, options),
+#if VOICESCRIBE_ONNXRUNTIME_DIRECTML
+            OnnxExecutionProvider.DirectMl =>
+                new DirectMlOnnxSessionFactory(logger, options),
+#else
             OnnxExecutionProvider.DirectMl =>
                 throw CreateUnavailableException(OnnxExecutionProvider.DirectMl),
+#endif
             OnnxExecutionProvider.Cuda =>
                 throw CreateUnavailableException(OnnxExecutionProvider.Cuda),
             _ => throw new ArgumentOutOfRangeException(
@@ -33,6 +38,7 @@ public static class OnnxSessionFactoryResolver
     private static NotSupportedException CreateUnavailableException(
         OnnxExecutionProvider provider) =>
         new(
-            $"Execution provider '{provider}' is not available in the CPU " +
+            $"Execution provider '{provider}' is not available in the " +
+            $"{OnnxRuntimeVariant.Name} " +
             "runtime variant. Use the matching VoiceScribe runtime build.");
 }

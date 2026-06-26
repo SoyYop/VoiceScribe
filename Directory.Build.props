@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <OnnxRuntimeFlavor Condition="'$(OnnxRuntimeFlavor)' == ''">Cpu</OnnxRuntimeFlavor>
+    <BaseIntermediateOutputPath>obj\$(OnnxRuntimeFlavor)\</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin\$(OnnxRuntimeFlavor)\</BaseOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

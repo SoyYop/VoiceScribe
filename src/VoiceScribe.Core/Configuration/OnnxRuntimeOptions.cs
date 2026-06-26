@@ -22,6 +22,12 @@ public sealed class OnnxRuntimeOptions
     public int? GpuMemoryLimitMiB { get; set; }
 
     /// <summary>
+    /// Allows a GPU session that cannot initialize to be recreated on CPU.
+    /// The fallback is logged with the original provider error.
+    /// </summary>
+    public bool AllowCpuFallback { get; set; } = true;
+
+    /// <summary>
     /// Enables ONNX Runtime profiling when supported by the selected provider.
     /// </summary>
     public bool EnableProfiling { get; set; }

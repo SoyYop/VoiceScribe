@@ -1,4 +1,5 @@
 using VoiceScribe.Core.ModelAssets;
+using VoiceScribe.Core.Engine;
 
 namespace VoiceScribe.Core.Configuration
 {
@@ -46,10 +47,10 @@ namespace VoiceScribe.Core.Configuration
 
             if (!Enum.IsDefined(inference.ExecutionProvider))
                 errors.Add("Inference.ExecutionProvider is invalid.");
-            else if (inference.ExecutionProvider != OnnxExecutionProvider.Cpu)
+            else if (!OnnxRuntimeVariant.Supports(inference.ExecutionProvider))
                 errors.Add(
                     $"Inference.ExecutionProvider '{inference.ExecutionProvider}' is not available " +
-                    "in the CPU runtime variant.");
+                    $"in the {OnnxRuntimeVariant.Name} runtime variant.");
             if (inference.DeviceId < 0)
                 errors.Add("Inference.DeviceId must be zero or greater.");
             if (inference.GpuMemoryLimitMiB is <= 0)

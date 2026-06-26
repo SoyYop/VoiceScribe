@@ -1,4 +1,5 @@
 using VoiceScribe.Core.Configuration;
+using VoiceScribe.Core.Engine;
 using VoiceScribe.Core.ModelAssets;
 
 namespace VoiceScribe.Core.Tests;
@@ -38,21 +39,31 @@ public sealed class VoiceAppConfigValidatorTests
         Assert.Contains(errors, error => error.Contains("GpuMemoryLimitMiB"));
     }
 
-    [Theory]
-    [InlineData(OnnxExecutionProvider.DirectMl)]
-    [InlineData(OnnxExecutionProvider.Cuda)]
-    public void Validate_RejectsProviderUnavailableInCpuVariant(
-        OnnxExecutionProvider provider)
+    [Fact]
+    public void Validate_HandlesDirectMlAccordingToRuntimeVariant()
     {
         VoiceAppConfig config = CreateConfig();
-        config.Inference.ExecutionProvider = provider;
+        config.Inference.ExecutionProvider = OnnxExecutionProvider.DirectMl;
 
         IReadOnlyList<string> errors =
             VoiceAppConfigValidator.Validate(config, CreateModel());
 
-        Assert.Contains(
-            errors,
-            error => error.Contains("CPU runtime variant"));
+        if (OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
+            Assert.DoesNotContain(errors, error => error.Contains("runtime variant"));
+        else
+            Assert.Contains(errors, error => error.Contains("runtime variant"));
+    }
+
+    [Fact]
+    public void Validate_RejectsCudaUntilCudaVariantExists()
+    {
+        VoiceAppConfig config = CreateConfig();
+        config.Inference.ExecutionProvider = OnnxExecutionProvider.Cuda;
+
+        IReadOnlyList<string> errors =
+            VoiceAppConfigValidator.Validate(config, CreateModel());
+
+        Assert.Contains(errors, error => error.Contains("runtime variant"));
     }
 
     [Fact]

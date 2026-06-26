@@ -10,9 +10,10 @@
     "QueueCapacity": 8
   },
   "Inference": {
-    "ExecutionProvider": "Cpu",
+    "ExecutionProvider": "DirectMl",
     "DeviceId": 0,
     "GpuMemoryLimitMiB": null,
+    "AllowCpuFallback": true,
     "EnableProfiling": false
   },
   "Nemotron": {
