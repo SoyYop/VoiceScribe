@@ -65,9 +65,13 @@ La base común para los tres modos ya está implementada:
 - `IOnnxSessionFactory` se inyecta en `NemotronEngine`.
 - `CpuOnnxSessionFactory` conserva el comportamiento actual.
 - `DirectMlOnnxSessionFactory` está disponible al compilar con `OnnxRuntimeFlavor=DirectMl`.
+- No se incluye `CudaOnnxSessionFactory` en la rama actual.
 - La variante CPU rechaza DirectML y CUDA; la variante DirectML rechaza CUDA.
+- La selección puede hacerse globalmente con `ExecutionProvider` o por submodelo con `EncoderProvider`, `DecoderProvider` y `JoinerProvider`.
 
-La prueba con los modelos reales detectó que decoder y joint cargan en DirectML, pero el encoder INT4 falla durante la inicialización con `E_INVALIDARG`. Si `AllowCpuFallback` está activo, solo esa sesión se recrea en CPU y el modo queda híbrido. Queda pendiente la variante CUDA y medir si acelerar decoder/joint compensa las transferencias.
+La prueba con los modelos reales detectó que decoder y joint cargan en DirectML, pero el encoder INT4 falla durante la inicialización con `E_INVALIDARG`. Si `AllowCpuFallback` está activo, solo esa sesión se recrea en CPU y el modo queda híbrido. En las mediciones locales, DirectML global con fallback fue más rápido que CPU puro y que separar decoder en CPU con joint en DirectML.
+
+CUDA fue probado como flavor separado con `Microsoft.ML.OnnxRuntime.Gpu` 1.27.0, CUDA 13.3 y cuDNN 9.23. Después de resolver las DLL faltantes (`cublasLt64_13.dll` y `cudnn64_9.dll`), falló en `cublasCreate` con `CUBLAS failure 8: the function requires an architectural feature absent from the device`. En esta GTX 1050/Pascal, CUDA moderno no es una ruta viable sin bajar a un stack antiguo y aumentar dependencias. Se decidió retirar la variante CUDA de la rama actual y conservar DirectML como acelerador funcional.
 
 ### 1. Dependencia nativa
 
@@ -75,16 +79,16 @@ En `VoiceScribe.Core.csproj`:
 
 - La variante CPU selecciona `Microsoft.ML.OnnxRuntime` 1.27.0.
 - La variante DirectML selecciona `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4, última versión publicada de ese paquete.
-- La futura variante CUDA deberá seleccionar `Microsoft.ML.OnnxRuntime.Gpu` sin combinar distribuciones nativas.
-- Se debe documentar CUDA, cuDNN, el runtime de Visual C++ y las rutas de DLL requeridas por la versión CUDA elegida.
+- No se referencia `Microsoft.ML.OnnxRuntime.Gpu` para evitar depender de CUDA/cuDNN en esta máquina.
 
-Antes de implementarlo se debe confirmar la matriz exacta de compatibilidad de la versión restaurada. No conviene actualizar ONNX Runtime al mismo tiempo que se introduce CUDA.
+Si se retoma CUDA en el futuro, debe hacerse como rama experimental separada con un stack CUDA 12.x/ONNX Runtime más antiguo compatible con Pascal.
 
 ### 2. Configuración
 
 Las opciones específicas del runtime son:
 
-- `ExecutionProvider`: `Cpu`, `DirectMl` o `Cuda`.
+- `ExecutionProvider`: `Cpu` o `DirectMl`. `Cuda` sigue existiendo en el enum para producir errores claros si aparece en configuración.
+- `EncoderProvider`, `DecoderProvider`, `JoinerProvider`: overrides opcionales por grafo; `null` usa `ExecutionProvider`.
 - `DeviceId`: inicialmente `0`.
 - `GpuMemoryLimitMiB`: opcional; valor inicial sugerido para pruebas, `3072`.
 - `EnableProfiling`: activa el perfil de ONNX Runtime.
@@ -98,8 +102,8 @@ La validación debe rechazar proveedores desconocidos, identificadores negativos
 Extraer de `NemotronEngine.Initialize` una fábrica de `SessionOptions` o de sesiones. Esa pieza debe:
 
 - Conservar `ORT_ENABLE_ALL` y `ORT_SEQUENTIAL` inicialmente.
-- Registrar CUDA con prioridad sobre CPU.
-- Aplicar `device_id`, límite de memoria y estrategia de arena cuando estén configurados.
+- Registrar DirectML cuando corresponda.
+- Aplicar `device_id`; el límite de memoria queda validado pero no aplicado por DirectML.
 - Crear encoder, decoder y joint con la misma política.
 - Liberar opciones y sesiones parciales si una creación falla.
 - Informar el proveedor solicitado, el proveedor efectivo y el fallback.
@@ -135,8 +139,8 @@ Esta etapa es más compleja porque el código actual inspecciona, remodela y cop
 ## Pruebas y criterios de aceptación
 
 1. Arranque en `Cpu`: comportamiento idéntico al actual.
-2. Arranque en `Cuda`: las tres sesiones se crean o se informa exactamente cuál grafo u operador falla.
-3. Arranque en `Auto` sin DLL de CUDA/cuDNN: fallback controlado a CPU.
+2. Arranque en `DirectMl`: decoder y joint se crean en DirectML; encoder cae a CPU con warning controlado.
+3. Configuración con `Cuda`: falla en validación con mensaje claro.
 4. Confirmar mediante logs/perfil de ONNX Runtime qué nodos usa CUDA y cuáles CPU.
 5. Medir con el mismo audio:
    - tiempo de carga;
@@ -153,11 +157,11 @@ La GPU se considerará útil si reduce de forma estable la latencia total o los 
 ## Orden recomendado de implementación
 
 1. Añadir opciones y validación del proveedor.
-2. Cambiar al paquete GPU e instalar dependencias CUDA/cuDNN compatibles.
-3. Centralizar la creación de sesiones.
-4. Implementar `Cpu`, `Cuda` y `Auto`.
-5. Agregar diagnóstico y medición.
-6. Probar los tres grafos en la GTX 1050.
+2. Cambiar al paquete GPU e instalar dependencias CUDA/cuDNN compatibles. Descartado para esta rama por incompatibilidad CUDA 13/GTX 1050.
+3. Centralizar la creación de sesiones. Completado.
+4. Implementar `Cpu` y `DirectMl`. Completado.
+5. Agregar diagnóstico y medición. Completado parcialmente con métricas por etapa.
+6. Probar los tres grafos en la GTX 1050 con DirectML.
 7. Evaluar I/O Binding únicamente si las transferencias son el cuello de botella.
 
 ## Referencias

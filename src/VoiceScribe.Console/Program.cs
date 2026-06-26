@@ -53,7 +53,7 @@ class Program
         // Inicialización del logging factory stand-alone
         using var loggerFactory = LoggerFactory.Create(builder =>
         {
-            builder.AddConsole().SetMinimumLevel(LogLevel.Warning);
+            builder.AddConsole().SetMinimumLevel(LogLevel.Trace);
         });
         ILogger<NemotronEngine> engineLogger = loggerFactory.CreateLogger<NemotronEngine>();
 
@@ -144,10 +144,21 @@ class Program
             shutdownCts.Cancel();
         };
         Console.CancelKeyPress += cancelHandler;
-        Task<NemotronEngine>? engineLoadTask = null;
 
         try
         {
+            if (DirectMlAdapterSelector.IsDirectMlRequested(config.Inference) &&
+                OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
+            {
+                IReadOnlyList<DirectMlAdapter> adapters =
+                    DirectMlAdapterSelector.GetAdapters();
+                config.Inference.DeviceId =
+                    DirectMlAdapterSelector.SelectDeviceId(
+                        adapters,
+                        config.Inference.DeviceId,
+                        shutdownCts.Token);
+            }
+
             NemotronOnnxSessionFactories sessionFactories =
                 OnnxSessionFactoryResolver.CreateForNemotron(
                     config.Inference,
@@ -155,27 +166,25 @@ class Program
 
             PrintInferenceConfiguration(config.Inference, sessionFactories);
 
+            int deviceNumber = ConsoleAudioInput.SelectDeviceNumber(
+                audioDevices,
+                shutdownCts.Token);
+
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.WriteLine(
                 $"[Model] Loading ONNX models with " +
-                $"{sessionFactories.Describe()} in background...");
+                $"{sessionFactories.Describe()}...");
             Console.ResetColor();
 
-            engineLoadTask = Task.Run(
-                () => new NemotronEngine(
+            await using NemotronEngine engine =
+                new(
                     engineLogger,
                     config.ModelDownloadsPath,
                     config.Audio,
                     config.Nemotron,
                     modelDefinition,
                     sessionFactories,
-                    _fileWriter));
-
-            int deviceNumber = ConsoleAudioInput.SelectDeviceNumber(
-                audioDevices,
-                shutdownCts.Token);
-            await using NemotronEngine engine =
-                await engineLoadTask.ConfigureAwait(false);
+                    _fileWriter);
             shutdownCts.Token.ThrowIfCancellationRequested();
 
             Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -213,19 +222,6 @@ class Program
         }
         catch (OperationCanceledException)
         {
-            if (engineLoadTask != null)
-            {
-                try
-                {
-                    await using NemotronEngine loadedEngine =
-                        await engineLoadTask.ConfigureAwait(false);
-                }
-                catch
-                {
-                    // The original cancellation result is returned below.
-                }
-            }
-
             engineLogger.LogInformation("[Application] Shutdown cancelled.");
             return 130;
         }
@@ -317,16 +313,19 @@ class Program
             $"  GPU memory limit   : " +
             $"{(options.GpuMemoryLimitMiB.HasValue ? $"{options.GpuMemoryLimitMiB} MiB" : "not set")}");
 
-        if ((sessionFactories.Encoder.ExecutionProvider == OnnxExecutionProvider.DirectMl ||
-             sessionFactories.Decoder.ExecutionProvider == OnnxExecutionProvider.DirectMl ||
-             sessionFactories.Joiner.ExecutionProvider == OnnxExecutionProvider.DirectMl) &&
+        if ((IsGpuProvider(sessionFactories.Encoder.ExecutionProvider) ||
+             IsGpuProvider(sessionFactories.Decoder.ExecutionProvider) ||
+             IsGpuProvider(sessionFactories.Joiner.ExecutionProvider)) &&
             options.AllowCpuFallback)
         {
             Console.WriteLine(
-                "  Note               : individual models may fall back to CPU if DirectML cannot initialize them.");
+                "  Note               : individual models may fall back to CPU if the GPU provider cannot initialize them.");
         }
 
         Console.ResetColor();
     }
+
+    private static bool IsGpuProvider(OnnxExecutionProvider provider) =>
+        provider is OnnxExecutionProvider.DirectMl or OnnxExecutionProvider.Cuda;
 
 }

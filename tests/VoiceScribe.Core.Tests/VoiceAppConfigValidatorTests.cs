@@ -83,7 +83,7 @@ public sealed class VoiceAppConfigValidatorTests
     }
 
     [Fact]
-    public void Validate_RejectsCudaUntilCudaVariantExists()
+    public void Validate_RejectsCuda()
     {
         VoiceAppConfig config = CreateConfig();
         config.Inference.ExecutionProvider = OnnxExecutionProvider.Cuda;

@@ -25,7 +25,7 @@ Las invariantes que deben preservarse al modificar audio, tensores ONNX, concurr
 - Conexión a Internet durante la primera descarga del modelo.
 - Espacio en disco suficiente para los archivos ONNX y sus datos externos.
 
-La implementación actual utiliza el proveedor de ejecución CPU de `Microsoft.ML.OnnxRuntime`. No se configura CUDA, DirectML ni otro acelerador.
+La implementación actual soporta dos variantes excluyentes de ONNX Runtime: CPU y DirectML. La variante se elige al compilar con `OnnxRuntimeFlavor`.
 
 ## Inicio rápido
 
@@ -54,7 +54,10 @@ Ejemplo:
     "QueueCapacity": 8
   },
   "Inference": {
-    "ExecutionProvider": "Cpu",
+    "ExecutionProvider": "DirectMl",
+    "EncoderProvider": null,
+    "DecoderProvider": null,
+    "JoinerProvider": null,
     "DeviceId": 0,
     "GpuMemoryLimitMiB": null,
     "AllowCpuFallback": true,
@@ -86,6 +89,10 @@ dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=DirectMl
 También se debe establecer `"ExecutionProvider": "DirectMl"` en `VoiceAppConfig.json`. La variante DirectML usa `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4; la variante CPU continúa usando ONNX Runtime 1.27.0.
 
 Con la exportación INT4 actual, decoder y joint crean sesiones DirectML, pero el encoder falla al inicializar el proveedor. Con `AllowCpuFallback: true`, el encoder se recrea explícitamente en CPU y se registra una advertencia. Por ello, esta modalidad es actualmente híbrida.
+
+Si hay más de un adaptador compatible con DirectML, la consola muestra una selección antes de cargar los modelos. El número elegido se guarda en memoria como `Inference.DeviceId` para esa ejecución.
+
+CUDA no se incluye como variante soportada en esta rama. La prueba con `Microsoft.ML.OnnxRuntime.Gpu` 1.27.0, CUDA 13.3 y cuDNN 9.23 cargó las DLL nativas, pero falló en `cublasCreate` con la GTX 1050 por requerir una característica arquitectónica ausente. Para reducir dependencias y mantener un perfil funcional en esta GPU, DirectML queda como acelerador recomendado.
 
 Si faltan archivos del modelo, la aplicación solicitará autorización para descargarlos:
 
@@ -231,9 +238,12 @@ El archivo `VoiceAppConfig.json` se copia al directorio de salida al compilar.
 | `Audio.BufferMilliseconds` | Duración de cada bloque de captura. |
 | `Audio.SilenceThreshold` | Pico mínimo normalizado para procesar un bloque. |
 | `Audio.QueueCapacity` | Número máximo de fragmentos pendientes de inferencia. |
-| `Inference.ExecutionProvider` | Proveedor ONNX solicitado: `Cpu`, `DirectMl` o `Cuda`. Debe estar incluido en la variante compilada. |
+| `Inference.ExecutionProvider` | Proveedor ONNX solicitado: `Cpu` o `DirectMl`. `Cuda` se reconoce como valor de configuración, pero no está soportado por las variantes actuales. |
+| `Inference.EncoderProvider` | Sobrescritura opcional para `encoder.onnx`. Con `null`, usa `ExecutionProvider`. |
+| `Inference.DecoderProvider` | Sobrescritura opcional para `decoder.onnx`. Con `null`, usa `ExecutionProvider`. |
+| `Inference.JoinerProvider` | Sobrescritura opcional para `joint.onnx`. Con `null`, usa `ExecutionProvider`. |
 | `Inference.DeviceId` | Identificador del dispositivo para proveedores GPU. |
-| `Inference.GpuMemoryLimitMiB` | Límite opcional de VRAM. Se ignora en CPU. |
+| `Inference.GpuMemoryLimitMiB` | Límite opcional de VRAM. Se valida, pero actualmente no se aplica en DirectML. |
 | `Inference.AllowCpuFallback` | Permite recrear en CPU una sesión GPU que no pueda inicializarse. |
 | `Inference.EnableProfiling` | Activa el perfil de ONNX Runtime. |
 | `Nemotron.LanguageId` | Identificador de idioma enviado al encoder; valor predeterminado: `101`. |

@@ -11,7 +11,7 @@
   },
   "Inference": {
     "ExecutionProvider": "DirectMl",
-    "EncoderProvider": null,
+    "EncoderProvider": "Cpu",
     "DecoderProvider": null,
     "JoinerProvider": null,
     "DeviceId": 0,

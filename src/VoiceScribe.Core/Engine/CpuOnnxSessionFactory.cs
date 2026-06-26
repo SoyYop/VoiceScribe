@@ -29,7 +29,11 @@ public sealed class CpuOnnxSessionFactory : IOnnxSessionFactory
         {
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
             ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
-            EnableProfiling = _options.EnableProfiling
+            EnableProfiling = _options.EnableProfiling,
+            // Temporal
+            LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_VERBOSE,
+            LogVerbosityLevel = 5
+            // 
         };
 
         _logger.LogInformation(

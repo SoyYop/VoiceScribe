@@ -33,10 +33,10 @@ public sealed class DirectMlOnnxSessionFactory : IOnnxSessionFactory
         catch (OnnxRuntimeException ex) when (_options.AllowCpuFallback)
         {
             _logger.LogWarning(
-                ex,
                 "DirectML could not initialize {ModelPath}. " +
-                "Recreating this session with the CPU provider.",
-                modelPath);
+                "Recreating this session with the CPU provider. Reason: {Reason}",
+                modelPath,
+                GetFirstErrorLine(ex));
 
             return new CpuOnnxSessionFactory(_logger, _options)
                 .CreateSession(modelPath);
@@ -61,6 +61,18 @@ public sealed class DirectMlOnnxSessionFactory : IOnnxSessionFactory
             _options.DeviceId);
 
         return new InferenceSession(modelPath, sessionOptions);
+    }
+
+    private static string GetFirstErrorLine(Exception exception)
+    {
+        string[] lines = exception.Message.Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries);
+
+        return lines.Length > 0
+            ? lines[0]
+            : exception.GetType().Name;
     }
 }
 #endif

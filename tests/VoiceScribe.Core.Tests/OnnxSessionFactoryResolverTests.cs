@@ -56,7 +56,7 @@ public sealed class OnnxSessionFactoryResolverTests
     }
 
     [Fact]
-    public void Create_RejectsCudaUntilCudaVariantExists()
+    public void Create_RejectsCuda()
     {
         var options = new OnnxRuntimeOptions
         {
