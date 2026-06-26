@@ -13,6 +13,7 @@ namespace VoiceScribe.Core.Configuration
             var errors = new List<string>();
             AudioCaptureOptions audio = config.Audio;
             NemotronModelOptions nemotron = config.Nemotron;
+            OnnxRuntimeOptions inference = config.Inference;
 
             if (audio.SampleRate <= 0)
                 errors.Add("Audio.SampleRate must be greater than zero.");
@@ -42,6 +43,18 @@ namespace VoiceScribe.Core.Configuration
 
             if (nemotron.MaxSymbolsPerStep is <= 0)
                 errors.Add("Nemotron.MaxSymbolsPerStep must be greater than zero when specified.");
+
+            if (!Enum.IsDefined(inference.ExecutionProvider))
+                errors.Add("Inference.ExecutionProvider is invalid.");
+            else if (inference.ExecutionProvider != OnnxExecutionProvider.Cpu)
+                errors.Add(
+                    $"Inference.ExecutionProvider '{inference.ExecutionProvider}' is not available " +
+                    "in the CPU runtime variant.");
+            if (inference.DeviceId < 0)
+                errors.Add("Inference.DeviceId must be zero or greater.");
+            if (inference.GpuMemoryLimitMiB is <= 0)
+                errors.Add(
+                    "Inference.GpuMemoryLimitMiB must be greater than zero when specified.");
 
             if (model.MaxSymbolsPerStep <= 0)
                 errors.Add("The model declares an invalid max_symbols_per_step value.");

@@ -23,6 +23,8 @@ public sealed class VoiceAppConfigValidatorTests
         config.Audio.QueueCapacity = 0;
         config.Nemotron.BlankId = 20000;
         config.Nemotron.MaxSymbolsPerStep = 0;
+        config.Inference.DeviceId = -1;
+        config.Inference.GpuMemoryLimitMiB = 0;
 
         IReadOnlyList<string> errors =
             VoiceAppConfigValidator.Validate(config, CreateModel());
@@ -32,6 +34,39 @@ public sealed class VoiceAppConfigValidatorTests
         Assert.Contains(errors, error => error.Contains("samples per buffer"));
         Assert.Contains(errors, error => error.Contains("MaxSymbolsPerStep"));
         Assert.Contains(errors, error => error.Contains("BlankId"));
+        Assert.Contains(errors, error => error.Contains("DeviceId"));
+        Assert.Contains(errors, error => error.Contains("GpuMemoryLimitMiB"));
+    }
+
+    [Theory]
+    [InlineData(OnnxExecutionProvider.DirectMl)]
+    [InlineData(OnnxExecutionProvider.Cuda)]
+    public void Validate_RejectsProviderUnavailableInCpuVariant(
+        OnnxExecutionProvider provider)
+    {
+        VoiceAppConfig config = CreateConfig();
+        config.Inference.ExecutionProvider = provider;
+
+        IReadOnlyList<string> errors =
+            VoiceAppConfigValidator.Validate(config, CreateModel());
+
+        Assert.Contains(
+            errors,
+            error => error.Contains("CPU runtime variant"));
+    }
+
+    [Fact]
+    public void Validate_RejectsUnknownProviderValue()
+    {
+        VoiceAppConfig config = CreateConfig();
+        config.Inference.ExecutionProvider = (OnnxExecutionProvider)99;
+
+        IReadOnlyList<string> errors =
+            VoiceAppConfigValidator.Validate(config, CreateModel());
+
+        Assert.Contains(
+            errors,
+            error => error.Contains("ExecutionProvider is invalid"));
     }
 
     private static VoiceAppConfig CreateConfig() => new()
@@ -45,7 +80,8 @@ public sealed class VoiceAppConfigValidatorTests
             SilenceThreshold = 0.003f,
             QueueCapacity = 8
         },
-        Nemotron = new NemotronModelOptions()
+        Nemotron = new NemotronModelOptions(),
+        Inference = new OnnxRuntimeOptions()
     };
 
     private static NemotronModelDefinition CreateModel() => new()

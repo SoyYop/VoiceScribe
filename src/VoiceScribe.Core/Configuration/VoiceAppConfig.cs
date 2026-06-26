@@ -40,6 +40,11 @@ namespace VoiceScribe.Core.Configuration
         /// </summary>
         public NemotronModelOptions Nemotron { get; set; } = new();
 
+        /// <summary>
+        /// ONNX Runtime execution provider settings.
+        /// </summary>
+        public OnnxRuntimeOptions Inference { get; set; } = new();
+
 
         /// <summary>
         /// Creates a SpeechAppConfig instance by reading and deserializing a JSON file. If the file is missing or invalid, it returns a default configuration instance.

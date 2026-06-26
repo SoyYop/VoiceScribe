@@ -9,6 +9,12 @@
     "SilenceThreshold": 0.003,
     "QueueCapacity": 8
   },
+  "Inference": {
+    "ExecutionProvider": "Cpu",
+    "DeviceId": 0,
+    "GpuMemoryLimitMiB": null,
+    "EnableProfiling": false
+  },
   "Nemotron": {
     "LanguageId": 101,
     "MaxSymbolsPerStep": null,

@@ -53,6 +53,12 @@ Ejemplo:
     "SilenceThreshold": 0.003,
     "QueueCapacity": 8
   },
+  "Inference": {
+    "ExecutionProvider": "Cpu",
+    "DeviceId": 0,
+    "GpuMemoryLimitMiB": null,
+    "EnableProfiling": false
+  },
   "Nemotron": {
     "LanguageId": 101,
     "MaxSymbolsPerStep": null,
@@ -213,6 +219,10 @@ El archivo `VoiceAppConfig.json` se copia al directorio de salida al compilar.
 | `Audio.BufferMilliseconds` | Duración de cada bloque de captura. |
 | `Audio.SilenceThreshold` | Pico mínimo normalizado para procesar un bloque. |
 | `Audio.QueueCapacity` | Número máximo de fragmentos pendientes de inferencia. |
+| `Inference.ExecutionProvider` | Proveedor ONNX solicitado: `Cpu`, `DirectMl` o `Cuda`. La variante actual solo incluye CPU. |
+| `Inference.DeviceId` | Identificador del dispositivo para proveedores GPU. |
+| `Inference.GpuMemoryLimitMiB` | Límite opcional de VRAM. Se ignora en CPU. |
+| `Inference.EnableProfiling` | Activa el perfil de ONNX Runtime. |
 | `Nemotron.LanguageId` | Identificador de idioma enviado al encoder; valor predeterminado: `101`. |
 | `Nemotron.MaxSymbolsPerStep` | Sobrescritura opcional del máximo de tokens por frame. Con `null`, se usa el contrato del modelo. |
 | `Nemotron.BlankId` | Sobrescritura opcional del token blank. Con `null`, se usa el contrato del modelo. |

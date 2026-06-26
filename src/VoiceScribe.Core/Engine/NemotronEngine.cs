@@ -25,6 +25,7 @@ namespace VoiceScribe.Core.Engine
         private readonly AudioCaptureOptions _audioOptions;
         private readonly NemotronModelOptions _modelOptions;
         private readonly NemotronModelDefinition _modelDefinition;
+        private readonly IOnnxSessionFactory _sessionFactory;
         private readonly Channel<byte[]> _audioQueue;
         private readonly Task _audioWorker;
         private readonly CancellationTokenSource _workerCancellation = new();
@@ -85,12 +86,14 @@ namespace VoiceScribe.Core.Engine
             AudioCaptureOptions audioOptions,
             NemotronModelOptions modelOptions,
             NemotronModelDefinition modelDefinition,
+            IOnnxSessionFactory sessionFactory,
             TextWriter? transcriptWriter)
         {
             _logger = logger;
             _audioOptions = audioOptions;
             _modelOptions = modelOptions;
             _modelDefinition = modelDefinition;
+            _sessionFactory = sessionFactory;
             _transcriptWriter = transcriptWriter;
 
             try
@@ -130,15 +133,13 @@ namespace VoiceScribe.Core.Engine
             var decoderPath = Path.Combine(modelFolderPath, _modelDefinition.Decoder.FileName);
             var jointPath = Path.Combine(modelFolderPath, _modelDefinition.Joiner.FileName);
 
-            using var sessionOptions = new SessionOptions
-            {
-                GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
-                ExecutionMode = ExecutionMode.ORT_SEQUENTIAL
-            };
+            _logger.LogInformation(
+                "Using ONNX execution provider {ExecutionProvider}.",
+                _sessionFactory.ExecutionProvider);
 
-            _encoderSession = new InferenceSession(encoderPath, sessionOptions);
-            _decoderSession = new InferenceSession(decoderPath, sessionOptions);
-            _jointSession = new InferenceSession(jointPath, sessionOptions);
+            _encoderSession = _sessionFactory.CreateSession(encoderPath);
+            _decoderSession = _sessionFactory.CreateSession(decoderPath);
+            _jointSession = _sessionFactory.CreateSession(jointPath);
 
             ValidateSessionContracts();
 

@@ -30,7 +30,8 @@ class Program
         RepoUrl = "https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4/resolve/main",
         ModelFiles = NemotronModelFiles.CreateRequiredFileList(),
         Audio = new AudioCaptureOptions(),
-        Nemotron = new NemotronModelOptions()
+        Nemotron = new NemotronModelOptions(),
+        Inference = new OnnxRuntimeOptions()
     };
 
 
@@ -82,6 +83,7 @@ class Program
 
         config.Audio ??= new AudioCaptureOptions();
         config.Nemotron ??= new NemotronModelOptions();
+        config.Inference ??= new OnnxRuntimeOptions();
 
         if (config.ModelFiles == null || config.ModelFiles.Count == 0)
         {
@@ -146,8 +148,15 @@ class Program
 
         try
         {
+            IOnnxSessionFactory sessionFactory =
+                OnnxSessionFactoryResolver.Create(
+                    config.Inference,
+                    engineLogger);
+
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("[Model] Loading ONNX models in background...");
+            Console.WriteLine(
+                $"[Model] Loading ONNX models with " +
+                $"{sessionFactory.ExecutionProvider} in background...");
             Console.ResetColor();
 
             engineLoadTask = Task.Run(
@@ -157,6 +166,7 @@ class Program
                     config.Audio,
                     config.Nemotron,
                     modelDefinition,
+                    sessionFactory,
                     _fileWriter));
 
             int deviceNumber = ConsoleAudioInput.SelectDeviceNumber(
