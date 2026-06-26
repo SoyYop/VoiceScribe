@@ -11,6 +11,9 @@
   },
   "Inference": {
     "ExecutionProvider": "DirectMl",
+    "EncoderProvider": null,
+    "DecoderProvider": null,
+    "JoinerProvider": null,
     "DeviceId": 0,
     "GpuMemoryLimitMiB": null,
     "AllowCpuFallback": true,

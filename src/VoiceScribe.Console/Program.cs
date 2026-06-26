@@ -148,17 +148,17 @@ class Program
 
         try
         {
-            IOnnxSessionFactory sessionFactory =
-                OnnxSessionFactoryResolver.Create(
+            NemotronOnnxSessionFactories sessionFactories =
+                OnnxSessionFactoryResolver.CreateForNemotron(
                     config.Inference,
                     engineLogger);
 
-            PrintInferenceConfiguration(config.Inference, sessionFactory);
+            PrintInferenceConfiguration(config.Inference, sessionFactories);
 
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.WriteLine(
                 $"[Model] Loading ONNX models with " +
-                $"{sessionFactory.ExecutionProvider} in background...");
+                $"{sessionFactories.Describe()} in background...");
             Console.ResetColor();
 
             engineLoadTask = Task.Run(
@@ -168,7 +168,7 @@ class Program
                     config.Audio,
                     config.Nemotron,
                     modelDefinition,
-                    sessionFactory,
+                    sessionFactories,
                     _fileWriter));
 
             int deviceNumber = ConsoleAudioInput.SelectDeviceNumber(
@@ -301,13 +301,15 @@ class Program
 
     private static void PrintInferenceConfiguration(
         OnnxRuntimeOptions options,
-        IOnnxSessionFactory sessionFactory)
+        NemotronOnnxSessionFactories sessionFactories)
     {
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.WriteLine("[Inference] Current configuration:");
         Console.WriteLine($"  Runtime flavor     : {OnnxRuntimeVariant.Name}");
-        Console.WriteLine($"  Requested provider : {options.ExecutionProvider}");
-        Console.WriteLine($"  Session provider   : {sessionFactory.ExecutionProvider}");
+        Console.WriteLine($"  Default provider   : {options.ExecutionProvider}");
+        Console.WriteLine($"  Encoder provider   : {sessionFactories.Encoder.ExecutionProvider}");
+        Console.WriteLine($"  Decoder provider   : {sessionFactories.Decoder.ExecutionProvider}");
+        Console.WriteLine($"  Joiner provider    : {sessionFactories.Joiner.ExecutionProvider}");
         Console.WriteLine($"  Device id          : {options.DeviceId}");
         Console.WriteLine($"  CPU fallback       : {options.AllowCpuFallback}");
         Console.WriteLine($"  Profiling          : {options.EnableProfiling}");
@@ -315,7 +317,9 @@ class Program
             $"  GPU memory limit   : " +
             $"{(options.GpuMemoryLimitMiB.HasValue ? $"{options.GpuMemoryLimitMiB} MiB" : "not set")}");
 
-        if (options.ExecutionProvider == OnnxExecutionProvider.DirectMl &&
+        if ((sessionFactories.Encoder.ExecutionProvider == OnnxExecutionProvider.DirectMl ||
+             sessionFactories.Decoder.ExecutionProvider == OnnxExecutionProvider.DirectMl ||
+             sessionFactories.Joiner.ExecutionProvider == OnnxExecutionProvider.DirectMl) &&
             options.AllowCpuFallback)
         {
             Console.WriteLine(

@@ -3,6 +3,7 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
 using NAudio.Wave;
+using System.Diagnostics;
 using System.Threading.Channels;
 
 using VoiceScribe.Core.Audio;
@@ -25,15 +26,26 @@ namespace VoiceScribe.Core.Engine
         private readonly AudioCaptureOptions _audioOptions;
         private readonly NemotronModelOptions _modelOptions;
         private readonly NemotronModelDefinition _modelDefinition;
-        private readonly IOnnxSessionFactory _sessionFactory;
+        private readonly NemotronOnnxSessionFactories _sessionFactories;
         private readonly Channel<byte[]> _audioQueue;
         private readonly Task _audioWorker;
         private readonly CancellationTokenSource _workerCancellation = new();
+        private const int MetricsReportIntervalChunks = 20;
 
         private readonly TextWriter? _transcriptWriter;
 
         private bool _isDisposed;
         private int _queueCompleted;
+        private long _metricsChunkCount;
+        private long _metricsDecoderRunCount;
+        private long _metricsJointRunCount;
+        private long _metricsEmittedTokenCount;
+        private double _metricsFeatureExtractionMs;
+        private double _metricsEncoderMs;
+        private double _metricsDecoderMs;
+        private double _metricsJointMs;
+        private double _metricsDecodeLoopMs;
+        private double _metricsTotalChunkMs;
 
         // Sesiones de ONNX Runtime para cada modelo
         private InferenceSession _encoderSession = null!;
@@ -86,14 +98,14 @@ namespace VoiceScribe.Core.Engine
             AudioCaptureOptions audioOptions,
             NemotronModelOptions modelOptions,
             NemotronModelDefinition modelDefinition,
-            IOnnxSessionFactory sessionFactory,
+            NemotronOnnxSessionFactories sessionFactories,
             TextWriter? transcriptWriter)
         {
             _logger = logger;
             _audioOptions = audioOptions;
             _modelOptions = modelOptions;
             _modelDefinition = modelDefinition;
-            _sessionFactory = sessionFactory;
+            _sessionFactories = sessionFactories;
             _transcriptWriter = transcriptWriter;
 
             try
@@ -134,12 +146,12 @@ namespace VoiceScribe.Core.Engine
             var jointPath = Path.Combine(modelFolderPath, _modelDefinition.Joiner.FileName);
 
             _logger.LogInformation(
-                "Using ONNX execution provider {ExecutionProvider}.",
-                _sessionFactory.ExecutionProvider);
+                "Using ONNX execution providers: {ExecutionProviders}.",
+                _sessionFactories.Describe());
 
-            _encoderSession = _sessionFactory.CreateSession(encoderPath);
-            _decoderSession = _sessionFactory.CreateSession(decoderPath);
-            _jointSession = _sessionFactory.CreateSession(jointPath);
+            _encoderSession = _sessionFactories.Encoder.CreateSession(encoderPath);
+            _decoderSession = _sessionFactories.Decoder.CreateSession(decoderPath);
+            _jointSession = _sessionFactories.Joiner.CreateSession(jointPath);
 
             ValidateSessionContracts();
 
@@ -255,6 +267,7 @@ namespace VoiceScribe.Core.Engine
         {
             try
             {
+                long chunkStart = Stopwatch.GetTimestamp();
                 int expectedSamples = _modelDefinition.ChunkSamples;
                 float maxAmp = 0f;
 
@@ -273,7 +286,9 @@ namespace VoiceScribe.Core.Engine
                 // IMPORTANTE:
                 // Aquí NO se debe hacer reshape directo del PCM.
                 // Aquí debe ir PCM -> log-mel.
+                long featureStart = Stopwatch.GetTimestamp();
                 var features = _featureExtractor.Extract(pcmChunk);
+                double featureExtractionMs = GetElapsedMilliseconds(featureStart);
 
                 _logger.LogDebug("Features extraídas: Frames={Frames}, MelBins={MelBins}, Total={Total}",
                     features.Frames, features.MelBins, features.Data.Length);
@@ -303,7 +318,9 @@ namespace VoiceScribe.Core.Engine
                     NamedOnnxValue.CreateFromTensor(_modelDefinition.Encoder.LanguageIdInput, langIdTensor)
                 };
 
+                long encoderStart = Stopwatch.GetTimestamp();
                 using var encoderResults = _encoderSession.Run(encoderInputs);
+                double encoderMs = GetElapsedMilliseconds(encoderStart);
 
                 var acoustic = encoderResults
                     .First(x => x.Name == _modelDefinition.Encoder.EncoderOutputsOutput)
@@ -313,9 +330,18 @@ namespace VoiceScribe.Core.Engine
 
                 UpdateCache(encoderResults);
 
-                DecodeRnntFrames(acoustic, T);
+                long decodeLoopStart = Stopwatch.GetTimestamp();
+                RnntDecodeMetrics decodeMetrics = DecodeRnntFrames(acoustic, T);
+                double decodeLoopMs = GetElapsedMilliseconds(decodeLoopStart);
 
                 _transcriptWriter?.Flush();
+
+                RecordPerformanceMetrics(
+                    featureExtractionMs,
+                    encoderMs,
+                    decodeMetrics,
+                    decodeLoopMs,
+                    GetElapsedMilliseconds(chunkStart));
             }
             catch (Exception ex)
             {
@@ -357,7 +383,9 @@ namespace VoiceScribe.Core.Engine
         /// </summary>
         /// <param name="acoustic"></param>
         /// <param name="frameCount"></param>
-        private void DecodeRnntFrames(Tensor<float> acoustic, int frameCount)
+        private RnntDecodeMetrics DecodeRnntFrames(
+            Tensor<float> acoustic,
+            int frameCount)
         {
             int encoderEmbeddingSize = acoustic.Dimensions[^1];
             if (encoderEmbeddingSize != _modelDefinition.EncoderHiddenSize)
@@ -368,6 +396,7 @@ namespace VoiceScribe.Core.Engine
             var encoderFrame = new DenseTensor<float>(
                 encoderFrameBuffer,
                 new[] { 1, 1, encoderEmbeddingSize });
+            RnntDecodeMetrics metrics = new();
 
             for (int t = 0; t < frameCount; t++)
             {
@@ -385,7 +414,10 @@ namespace VoiceScribe.Core.Engine
                 NamedOnnxValue.CreateFromTensor(_modelDefinition.Decoder.CellStateInput, _decoderCIn)
             };
 
+                    long decoderStart = Stopwatch.GetTimestamp();
                     using var decResults = _decoderSession.Run(decInputs);
+                    metrics.DecoderMs += GetElapsedMilliseconds(decoderStart);
+                    metrics.DecoderRuns++;
 
                     var decOutTensor = decResults
                         .First(x => x.Name == _modelDefinition.Decoder.DecoderOutput)
@@ -412,7 +444,10 @@ namespace VoiceScribe.Core.Engine
                         NamedOnnxValue.CreateFromTensor(_modelDefinition.Joiner.DecoderOutputInput, decOutReshaped)
                     };
 
+                    long jointStart = Stopwatch.GetTimestamp();
                     using var jointResults = _jointSession.Run(jointInputs);
+                    metrics.JointMs += GetElapsedMilliseconds(jointStart);
+                    metrics.JointRuns++;
 
                     var jointOut = jointResults
                         .First(x => x.Name == _modelDefinition.Joiner.LogitsOutput)
@@ -429,8 +464,67 @@ namespace VoiceScribe.Core.Engine
                     _decoderTargets[0, 0] = token;
 
                     EmitToken(token);
+                    metrics.EmittedTokens++;
                 }
             }
+
+            return metrics;
+        }
+
+        private void RecordPerformanceMetrics(
+            double featureExtractionMs,
+            double encoderMs,
+            RnntDecodeMetrics decodeMetrics,
+            double decodeLoopMs,
+            double totalChunkMs)
+        {
+            _metricsChunkCount++;
+            _metricsDecoderRunCount += decodeMetrics.DecoderRuns;
+            _metricsJointRunCount += decodeMetrics.JointRuns;
+            _metricsEmittedTokenCount += decodeMetrics.EmittedTokens;
+            _metricsFeatureExtractionMs += featureExtractionMs;
+            _metricsEncoderMs += encoderMs;
+            _metricsDecoderMs += decodeMetrics.DecoderMs;
+            _metricsJointMs += decodeMetrics.JointMs;
+            _metricsDecodeLoopMs += decodeLoopMs;
+            _metricsTotalChunkMs += totalChunkMs;
+
+            if (_metricsChunkCount % MetricsReportIntervalChunks != 0)
+                return;
+
+            double chunks = _metricsChunkCount;
+            double decoderRuns = Math.Max(1, _metricsDecoderRunCount);
+            double jointRuns = Math.Max(1, _metricsJointRunCount);
+
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine();
+            Console.WriteLine(
+                "[Metrics] chunks={0} provider={1} avg_ms: total={2:F1}, features={3:F1}, encoder={4:F1}, decode_loop={5:F1}, decoder_run={6:F2}, joint_run={7:F2}; runs: decoder={8}, joint={9}, tokens={10}",
+                _metricsChunkCount,
+                _sessionFactories.Describe(),
+                _metricsTotalChunkMs / chunks,
+                _metricsFeatureExtractionMs / chunks,
+                _metricsEncoderMs / chunks,
+                _metricsDecodeLoopMs / chunks,
+                _metricsDecoderMs / decoderRuns,
+                _metricsJointMs / jointRuns,
+                _metricsDecoderRunCount,
+                _metricsJointRunCount,
+                _metricsEmittedTokenCount);
+            Console.ResetColor();
+        }
+
+        private static double GetElapsedMilliseconds(long startTimestamp) =>
+            (Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 /
+            Stopwatch.Frequency;
+
+        private struct RnntDecodeMetrics
+        {
+            public double DecoderMs;
+            public double JointMs;
+            public long DecoderRuns;
+            public long JointRuns;
+            public long EmittedTokens;
         }
 
         private long ResolveBlankId(Tensor<float> jointOutput)

@@ -20,4 +20,37 @@ public sealed class OnnxRuntimeOptionsTests
         Assert.NotNull(options);
         Assert.Equal(expected, options.ExecutionProvider);
     }
+
+    [Fact]
+    public void SubmodelProviders_DeserializeFromStrings()
+    {
+        OnnxRuntimeOptions? options =
+            JsonSerializer.Deserialize<OnnxRuntimeOptions>(
+                """
+                {
+                  "ExecutionProvider": "Cpu",
+                  "EncoderProvider": "Cpu",
+                  "DecoderProvider": "Cpu",
+                  "JoinerProvider": "DirectMl"
+                }
+                """);
+
+        Assert.NotNull(options);
+        Assert.Equal(OnnxExecutionProvider.Cpu, options.GetEncoderProvider());
+        Assert.Equal(OnnxExecutionProvider.Cpu, options.GetDecoderProvider());
+        Assert.Equal(OnnxExecutionProvider.DirectMl, options.GetJoinerProvider());
+    }
+
+    [Fact]
+    public void SubmodelProviders_DefaultToGlobalExecutionProvider()
+    {
+        var options = new OnnxRuntimeOptions
+        {
+            ExecutionProvider = OnnxExecutionProvider.DirectMl
+        };
+
+        Assert.Equal(OnnxExecutionProvider.DirectMl, options.GetEncoderProvider());
+        Assert.Equal(OnnxExecutionProvider.DirectMl, options.GetDecoderProvider());
+        Assert.Equal(OnnxExecutionProvider.DirectMl, options.GetJoinerProvider());
+    }
 }

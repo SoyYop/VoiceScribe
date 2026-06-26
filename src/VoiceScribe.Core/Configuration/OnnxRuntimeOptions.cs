@@ -12,6 +12,24 @@ public sealed class OnnxRuntimeOptions
         OnnxExecutionProvider.Cpu;
 
     /// <summary>
+    /// Optional execution provider override for encoder.onnx.
+    /// When unset, ExecutionProvider is used.
+    /// </summary>
+    public OnnxExecutionProvider? EncoderProvider { get; set; }
+
+    /// <summary>
+    /// Optional execution provider override for decoder.onnx.
+    /// When unset, ExecutionProvider is used.
+    /// </summary>
+    public OnnxExecutionProvider? DecoderProvider { get; set; }
+
+    /// <summary>
+    /// Optional execution provider override for joint.onnx.
+    /// When unset, ExecutionProvider is used.
+    /// </summary>
+    public OnnxExecutionProvider? JoinerProvider { get; set; }
+
+    /// <summary>
     /// Device selected by GPU execution providers.
     /// </summary>
     public int DeviceId { get; set; }
@@ -31,4 +49,13 @@ public sealed class OnnxRuntimeOptions
     /// Enables ONNX Runtime profiling when supported by the selected provider.
     /// </summary>
     public bool EnableProfiling { get; set; }
+
+    public OnnxExecutionProvider GetEncoderProvider() =>
+        EncoderProvider ?? ExecutionProvider;
+
+    public OnnxExecutionProvider GetDecoderProvider() =>
+        DecoderProvider ?? ExecutionProvider;
+
+    public OnnxExecutionProvider GetJoinerProvider() =>
+        JoinerProvider ?? ExecutionProvider;
 }

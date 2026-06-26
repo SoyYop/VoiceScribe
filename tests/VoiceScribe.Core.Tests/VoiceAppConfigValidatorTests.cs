@@ -55,6 +55,34 @@ public sealed class VoiceAppConfigValidatorTests
     }
 
     [Fact]
+    public void Validate_HandlesSubmodelDirectMlAccordingToRuntimeVariant()
+    {
+        VoiceAppConfig config = CreateConfig();
+        config.Inference.ExecutionProvider = OnnxExecutionProvider.Cpu;
+        config.Inference.EncoderProvider = OnnxExecutionProvider.Cpu;
+        config.Inference.DecoderProvider = OnnxExecutionProvider.Cpu;
+        config.Inference.JoinerProvider = OnnxExecutionProvider.DirectMl;
+
+        IReadOnlyList<string> errors =
+            VoiceAppConfigValidator.Validate(config, CreateModel());
+
+        if (OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
+        {
+            Assert.DoesNotContain(
+                errors,
+                error => error.Contains("JoinerProvider") &&
+                         error.Contains("runtime variant"));
+        }
+        else
+        {
+            Assert.Contains(
+                errors,
+                error => error.Contains("JoinerProvider") &&
+                         error.Contains("runtime variant"));
+        }
+    }
+
+    [Fact]
     public void Validate_RejectsCudaUntilCudaVariantExists()
     {
         VoiceAppConfig config = CreateConfig();
@@ -78,6 +106,20 @@ public sealed class VoiceAppConfigValidatorTests
         Assert.Contains(
             errors,
             error => error.Contains("ExecutionProvider is invalid"));
+    }
+
+    [Fact]
+    public void Validate_RejectsUnknownSubmodelProviderValue()
+    {
+        VoiceAppConfig config = CreateConfig();
+        config.Inference.JoinerProvider = (OnnxExecutionProvider)99;
+
+        IReadOnlyList<string> errors =
+            VoiceAppConfigValidator.Validate(config, CreateModel());
+
+        Assert.Contains(
+            errors,
+            error => error.Contains("JoinerProvider is invalid"));
     }
 
     private static VoiceAppConfig CreateConfig() => new()

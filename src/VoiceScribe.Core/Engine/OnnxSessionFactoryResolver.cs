@@ -15,7 +15,31 @@ public static class OnnxSessionFactoryResolver
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
-        return options.ExecutionProvider switch
+        return Create(options.ExecutionProvider, options, logger);
+    }
+
+    public static NemotronOnnxSessionFactories CreateForNemotron(
+        OnnxRuntimeOptions options,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        return new NemotronOnnxSessionFactories(
+            Create(options.GetEncoderProvider(), options, logger),
+            Create(options.GetDecoderProvider(), options, logger),
+            Create(options.GetJoinerProvider(), options, logger));
+    }
+
+    public static IOnnxSessionFactory Create(
+        OnnxExecutionProvider provider,
+        OnnxRuntimeOptions options,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        return provider switch
         {
             OnnxExecutionProvider.Cpu =>
                 new CpuOnnxSessionFactory(logger, options),
@@ -29,8 +53,8 @@ public static class OnnxSessionFactoryResolver
             OnnxExecutionProvider.Cuda =>
                 throw CreateUnavailableException(OnnxExecutionProvider.Cuda),
             _ => throw new ArgumentOutOfRangeException(
-                nameof(options),
-                options.ExecutionProvider,
+                nameof(provider),
+                provider,
                 "Unknown ONNX execution provider.")
         };
     }

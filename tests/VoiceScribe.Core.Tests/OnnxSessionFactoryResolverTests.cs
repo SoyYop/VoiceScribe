@@ -71,4 +71,38 @@ public sealed class OnnxSessionFactoryResolverTests
 
         Assert.Contains("runtime variant", exception.Message);
     }
+
+    [Fact]
+    public void CreateForNemotron_UsesSubmodelProviderOverrides()
+    {
+        var options = new OnnxRuntimeOptions
+        {
+            ExecutionProvider = OnnxExecutionProvider.Cpu,
+            EncoderProvider = OnnxExecutionProvider.Cpu,
+            DecoderProvider = OnnxExecutionProvider.Cpu,
+            JoinerProvider = OnnxExecutionProvider.DirectMl
+        };
+
+        if (OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
+        {
+            NemotronOnnxSessionFactories factories =
+                OnnxSessionFactoryResolver.CreateForNemotron(
+                    options,
+                    NullLogger.Instance);
+
+            Assert.Equal(OnnxExecutionProvider.Cpu, factories.Encoder.ExecutionProvider);
+            Assert.Equal(OnnxExecutionProvider.Cpu, factories.Decoder.ExecutionProvider);
+            Assert.Equal(OnnxExecutionProvider.DirectMl, factories.Joiner.ExecutionProvider);
+        }
+        else
+        {
+            NotSupportedException exception =
+                Assert.Throws<NotSupportedException>(
+                    () => OnnxSessionFactoryResolver.CreateForNemotron(
+                        options,
+                        NullLogger.Instance));
+
+            Assert.Contains("runtime variant", exception.Message);
+        }
+    }
 }

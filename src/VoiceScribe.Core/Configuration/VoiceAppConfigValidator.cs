@@ -45,12 +45,23 @@ namespace VoiceScribe.Core.Configuration
             if (nemotron.MaxSymbolsPerStep is <= 0)
                 errors.Add("Nemotron.MaxSymbolsPerStep must be greater than zero when specified.");
 
-            if (!Enum.IsDefined(inference.ExecutionProvider))
-                errors.Add("Inference.ExecutionProvider is invalid.");
-            else if (!OnnxRuntimeVariant.Supports(inference.ExecutionProvider))
-                errors.Add(
-                    $"Inference.ExecutionProvider '{inference.ExecutionProvider}' is not available " +
-                    $"in the {OnnxRuntimeVariant.Name} runtime variant.");
+            ValidateProvider(
+                "Inference.ExecutionProvider",
+                inference.ExecutionProvider,
+                errors);
+            ValidateProvider(
+                "Inference.EncoderProvider",
+                inference.EncoderProvider,
+                errors);
+            ValidateProvider(
+                "Inference.DecoderProvider",
+                inference.DecoderProvider,
+                errors);
+            ValidateProvider(
+                "Inference.JoinerProvider",
+                inference.JoinerProvider,
+                errors);
+
             if (inference.DeviceId < 0)
                 errors.Add("Inference.DeviceId must be zero or greater.");
             if (inference.GpuMemoryLimitMiB is <= 0)
@@ -70,6 +81,36 @@ namespace VoiceScribe.Core.Configuration
                     $"Nemotron.BlankId must be within [0, {model.VocabularySize - 1}].");
 
             return errors;
+        }
+
+        private static void ValidateProvider(
+            string propertyName,
+            OnnxExecutionProvider? provider,
+            List<string> errors)
+        {
+            if (!provider.HasValue)
+                return;
+
+            ValidateProvider(propertyName, provider.Value, errors);
+        }
+
+        private static void ValidateProvider(
+            string propertyName,
+            OnnxExecutionProvider provider,
+            List<string> errors)
+        {
+            if (!Enum.IsDefined(provider))
+            {
+                errors.Add($"{propertyName} is invalid.");
+                return;
+            }
+
+            if (!OnnxRuntimeVariant.Supports(provider))
+            {
+                errors.Add(
+                    $"{propertyName} '{provider}' is not available " +
+                    $"in the {OnnxRuntimeVariant.Name} runtime variant.");
+            }
         }
     }
 }
