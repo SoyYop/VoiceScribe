@@ -335,6 +335,9 @@ VoiceScribe/
 ├── VoiceScribe.sln
 ├── src/
 │   ├── VoiceScribe.Console/
+│   │   ├── Audio/
+│   │   ├── Benchmark/
+│   │   ├── CommandLine/
 │   │   ├── Program.cs
 │   │   ├── appsettings.json
 │   │   ├── VoiceAppConfig.json

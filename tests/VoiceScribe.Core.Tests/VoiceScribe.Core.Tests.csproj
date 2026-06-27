@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\VoiceScribe.Console\VoiceScribe.Console.csproj" />
     <ProjectReference Include="..\..\src\VoiceScribe.Core\VoiceScribe.Core.csproj" />
   </ItemGroup>
 

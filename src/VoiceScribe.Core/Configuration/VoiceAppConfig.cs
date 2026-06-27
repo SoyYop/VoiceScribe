@@ -47,7 +47,7 @@ namespace VoiceScribe.Core.Configuration
 
 
         /// <summary>
-        /// Creates a SpeechAppConfig instance by reading and deserializing a JSON file. If the file is missing or invalid, it returns a default configuration instance.
+        /// Creates a VoiceAppConfig instance by reading and deserializing a JSON file. If the file is missing or invalid, it returns a default configuration instance.
         /// </summary>
         /// <param name="fileName"></param>
         /// <returns></returns>

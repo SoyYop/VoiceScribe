@@ -9,6 +9,8 @@ using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 
 using VoiceScribe.Console.Audio;
+using VoiceScribe.Console.Benchmark;
+using VoiceScribe.Console.CommandLine;
 using VoiceScribe.Core.Configuration;
 using VoiceScribe.Core.Engine;
 using VoiceScribe.Core.ModelAssets;
@@ -36,18 +38,10 @@ class Program
     };
 
 
-    /// <summary>
-    /// Optional StreamWriter for outputting transcripts to a file. If not initialized, transcripts will only be printed to the console.
-    /// The file path can be provided as a command-line argument when starting the application. The StreamWriter is managed with proper
-    /// disposal to ensure file integrity and resource cleanup.
-    /// </summary>
-    private static StreamWriter? _fileWriter;
-
-
     static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
-        RunOptions runOptions = ParseRunOptions(args);
+        RunOptions runOptions = RunOptionsParser.Parse(args);
         Console.WriteLine("============================================================");
         Console.WriteLine("  A 'Simple' NVIDIA Nemotron-3.5-ASR Real-Time C# Engine    ");
         Console.WriteLine("============================================================");
@@ -65,12 +59,13 @@ class Program
         });
         ILogger<NemotronEngine> engineLogger = loggerFactory.CreateLogger<NemotronEngine>();
 
+        StreamWriter? transcriptWriter = null;
 
         if (runOptions.TranscriptPath is not null)
         {
             try
             {
-                _fileWriter = new StreamWriter(runOptions.TranscriptPath, append: true, Encoding.UTF8);
+                transcriptWriter = new StreamWriter(runOptions.TranscriptPath, append: true, Encoding.UTF8);
                 engineLogger.LogInformation($"[Config] Transcripts target file: {Path.GetFullPath(runOptions.TranscriptPath)}");
             }
             catch (Exception ex)
@@ -194,7 +189,7 @@ class Program
                     config.Nemotron,
                     modelDefinition,
                     sessionFactories,
-                    _fileWriter);
+                    transcriptWriter);
             shutdownCts.Token.ThrowIfCancellationRequested();
 
             Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -203,7 +198,7 @@ class Program
 
             if (runOptions.Benchmark)
             {
-                await RunSyntheticBenchmarkAsync(
+                await SyntheticBenchmarkRunner.RunAsync(
                     engine,
                     modelDefinition,
                     config.Audio,
@@ -255,126 +250,10 @@ class Program
         finally
         {
             Console.CancelKeyPress -= cancelHandler;
-            if (_fileWriter != null)
-                await _fileWriter.DisposeAsync();
+            if (transcriptWriter != null)
+                await transcriptWriter.DisposeAsync();
         }
     }
-
-    private static RunOptions ParseRunOptions(string[] args)
-    {
-        if (args.Length == 0)
-            return new RunOptions(false, 20, null);
-
-        if (!string.Equals(args[0], "--benchmark", StringComparison.OrdinalIgnoreCase))
-            return new RunOptions(false, 20, args[0]);
-
-        int chunks = 20;
-        if (args.Length > 1 &&
-            (!int.TryParse(args[1], out chunks) || chunks <= 0))
-        {
-            throw new ArgumentException(
-                "--benchmark expects a positive chunk count.");
-        }
-
-        return new RunOptions(true, chunks, null);
-    }
-
-    private static async Task RunSyntheticBenchmarkAsync(
-        NemotronEngine engine,
-        NemotronModelDefinition modelDefinition,
-        AudioCaptureOptions audioOptions,
-        int chunks,
-        CancellationToken cancellationToken)
-    {
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine(
-            $"\n>>> Synthetic benchmark active. Processing {chunks} generated audio chunks. <<<\n");
-        Console.ResetColor();
-
-        int bytesPerSample = audioOptions.BitsPerSample / 8;
-        int bytesPerFrame = bytesPerSample * audioOptions.Channels;
-        int expectedBytes = modelDefinition.ChunkSamples * bytesPerFrame;
-        double phase = 0;
-        double phaseStep = 2 * Math.PI * 440 / audioOptions.SampleRate;
-
-        for (int i = 0; i < chunks; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            byte[] buffer = new byte[expectedBytes];
-            FillSineWaveChunk(buffer, audioOptions, modelDefinition.ChunkSamples, ref phase, phaseStep);
-            engine.ProcessAudioChunk(null, new WaveInEventArgs(buffer, buffer.Length));
-        }
-
-        await engine.StopAsync(cancellationToken);
-    }
-
-    private static void FillSineWaveChunk(
-        byte[] buffer,
-        AudioCaptureOptions audioOptions,
-        int samples,
-        ref double phase,
-        double phaseStep)
-    {
-        int bytesPerSample = audioOptions.BitsPerSample / 8;
-        int bytesPerFrame = bytesPerSample * audioOptions.Channels;
-
-        for (int sampleIndex = 0; sampleIndex < samples; sampleIndex++)
-        {
-            float sample = (float)(Math.Sin(phase) * 0.25);
-            phase += phaseStep;
-
-            for (int channel = 0; channel < audioOptions.Channels; channel++)
-            {
-                int offset = sampleIndex * bytesPerFrame + channel * bytesPerSample;
-                WritePcmSample(buffer, offset, audioOptions.BitsPerSample, sample);
-            }
-        }
-    }
-
-    private static void WritePcmSample(
-        byte[] buffer,
-        int offset,
-        int bitsPerSample,
-        float sample)
-    {
-        switch (bitsPerSample)
-        {
-            case 8:
-                buffer[offset] = (byte)Math.Clamp((int)Math.Round(sample * 127 + 128), 0, 255);
-                break;
-            case 16:
-                BitConverter.TryWriteBytes(
-                    buffer.AsSpan(offset, 2),
-                    (short)Math.Clamp((int)Math.Round(sample * 32767), short.MinValue, short.MaxValue));
-                break;
-            case 24:
-                int sample24 = Math.Clamp(
-                    (int)Math.Round(sample * 8388607),
-                    -8388608,
-                    8388607);
-                buffer[offset] = (byte)(sample24 & 0xFF);
-                buffer[offset + 1] = (byte)((sample24 >> 8) & 0xFF);
-                buffer[offset + 2] = (byte)((sample24 >> 16) & 0xFF);
-                break;
-            case 32:
-                BitConverter.TryWriteBytes(
-                    buffer.AsSpan(offset, 4),
-                    Math.Clamp(
-                        (int)Math.Round(sample * int.MaxValue),
-                        int.MinValue,
-                        int.MaxValue));
-                break;
-            default:
-                throw new NotSupportedException(
-                    $"PCM bit depth '{bitsPerSample}' is not supported.");
-        }
-    }
-
-    private sealed record RunOptions(
-        bool Benchmark,
-        int BenchmarkChunks,
-        string? TranscriptPath);
 
 
     /// <summary>
