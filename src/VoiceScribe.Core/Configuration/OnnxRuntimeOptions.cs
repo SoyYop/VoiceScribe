@@ -50,6 +50,17 @@ public sealed class OnnxRuntimeOptions
     /// </summary>
     public bool EnableProfiling { get; set; }
 
+    /// <summary>
+    /// Optional ONNX Runtime log severity level: Verbose, Info, Warning, Error or Fatal.
+    /// When unset, ONNX Runtime uses its default severity.
+    /// </summary>
+    public string? LogSeverityLevel { get; set; }
+
+    /// <summary>
+    /// Optional ONNX Runtime verbosity level. It is mainly useful with Verbose logging.
+    /// </summary>
+    public int? LogVerbosityLevel { get; set; }
+
     public OnnxExecutionProvider GetEncoderProvider() =>
         EncoderProvider ?? ExecutionProvider;
 

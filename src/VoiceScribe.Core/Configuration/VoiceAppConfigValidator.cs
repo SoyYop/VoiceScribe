@@ -67,6 +67,16 @@ namespace VoiceScribe.Core.Configuration
             if (inference.GpuMemoryLimitMiB is <= 0)
                 errors.Add(
                     "Inference.GpuMemoryLimitMiB must be greater than zero when specified.");
+            if (!OnnxSessionOptionsConfigurator.IsValidLogSeverityLevel(
+                inference.LogSeverityLevel))
+            {
+                errors.Add(
+                    "Inference.LogSeverityLevel must be Verbose, Info, Warning, Error or Fatal when specified.");
+            }
+
+            if (inference.LogVerbosityLevel is < 0)
+                errors.Add(
+                    "Inference.LogVerbosityLevel must be zero or greater when specified.");
 
             if (model.MaxSymbolsPerStep <= 0)
                 errors.Add("The model declares an invalid max_symbols_per_step value.");

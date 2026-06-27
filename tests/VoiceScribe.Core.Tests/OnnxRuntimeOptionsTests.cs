@@ -53,4 +53,21 @@ public sealed class OnnxRuntimeOptionsTests
         Assert.Equal(OnnxExecutionProvider.DirectMl, options.GetDecoderProvider());
         Assert.Equal(OnnxExecutionProvider.DirectMl, options.GetJoinerProvider());
     }
+
+    [Fact]
+    public void LoggingOptions_DeserializeFromJson()
+    {
+        OnnxRuntimeOptions? options =
+            JsonSerializer.Deserialize<OnnxRuntimeOptions>(
+                """
+                {
+                  "LogSeverityLevel": "Verbose",
+                  "LogVerbosityLevel": 5
+                }
+                """);
+
+        Assert.NotNull(options);
+        Assert.Equal("Verbose", options.LogSeverityLevel);
+        Assert.Equal(5, options.LogVerbosityLevel);
+    }
 }

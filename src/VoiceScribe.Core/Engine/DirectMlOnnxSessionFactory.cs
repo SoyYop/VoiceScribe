@@ -53,10 +53,13 @@ public sealed class DirectMlOnnxSessionFactory : IOnnxSessionFactory
             EnableProfiling = _options.EnableProfiling
         };
 
+        OnnxSessionOptionsConfigurator.ApplyLogging(sessionOptions, _options);
+
         sessionOptions.AppendExecutionProvider_DML(_options.DeviceId);
 
         _logger.LogInformation(
-            "Creating DirectML ONNX session for {ModelPath} on device {DeviceId}.",
+            "Creating DirectML ONNX session via {RuntimeVariant} runtime for {ModelPath} on device {DeviceId}.",
+            OnnxRuntimeVariant.Name,
             modelPath,
             _options.DeviceId);
 

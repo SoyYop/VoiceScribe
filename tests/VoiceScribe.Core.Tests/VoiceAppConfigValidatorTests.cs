@@ -26,6 +26,8 @@ public sealed class VoiceAppConfigValidatorTests
         config.Nemotron.MaxSymbolsPerStep = 0;
         config.Inference.DeviceId = -1;
         config.Inference.GpuMemoryLimitMiB = 0;
+        config.Inference.LogSeverityLevel = "Trace";
+        config.Inference.LogVerbosityLevel = -1;
 
         IReadOnlyList<string> errors =
             VoiceAppConfigValidator.Validate(config, CreateModel());
@@ -37,6 +39,32 @@ public sealed class VoiceAppConfigValidatorTests
         Assert.Contains(errors, error => error.Contains("BlankId"));
         Assert.Contains(errors, error => error.Contains("DeviceId"));
         Assert.Contains(errors, error => error.Contains("GpuMemoryLimitMiB"));
+        Assert.Contains(errors, error => error.Contains("LogSeverityLevel"));
+        Assert.Contains(errors, error => error.Contains("LogVerbosityLevel"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("Verbose")]
+    [InlineData("Info")]
+    [InlineData("Warning")]
+    [InlineData("Error")]
+    [InlineData("Fatal")]
+    public void Validate_AcceptsSupportedLogSeverityLevels(
+        string? logSeverityLevel)
+    {
+        VoiceAppConfig config = CreateConfig();
+        config.Inference.LogSeverityLevel = logSeverityLevel;
+        config.Inference.LogVerbosityLevel = 5;
+
+        IReadOnlyList<string> errors =
+            VoiceAppConfigValidator.Validate(config, CreateModel());
+
+        Assert.DoesNotContain(
+            errors,
+            error => error.Contains("LogSeverityLevel") ||
+                     error.Contains("LogVerbosityLevel"));
     }
 
     [Fact]

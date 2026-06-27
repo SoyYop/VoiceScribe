@@ -7,7 +7,9 @@ namespace VoiceScribe.Core.Engine;
 /// </summary>
 public static class OnnxRuntimeVariant
 {
-#if VOICESCRIBE_ONNXRUNTIME_DIRECTML
+#if VOICESCRIBE_ONNXRUNTIME_WINDOWSML
+    public const string Name = "WindowsML";
+#elif VOICESCRIBE_ONNXRUNTIME_DIRECTML
     public const string Name = "DirectML";
 #else
     public const string Name = "CPU";

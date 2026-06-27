@@ -3,6 +3,7 @@ using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 using NAudio.Wave;
@@ -46,24 +47,31 @@ class Program
     static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
+        RunOptions runOptions = ParseRunOptions(args);
         Console.WriteLine("============================================================");
         Console.WriteLine("  A 'Simple' NVIDIA Nemotron-3.5-ASR Real-Time C# Engine    ");
         Console.WriteLine("============================================================");
 
+        IConfiguration appSettings = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+            .Build();
+
         // Inicialización del logging factory stand-alone
         using var loggerFactory = LoggerFactory.Create(builder =>
         {
-            builder.AddConsole().SetMinimumLevel(LogLevel.Trace);
+            builder.AddConfiguration(appSettings.GetSection("Logging"));
+            builder.AddConsole();
         });
         ILogger<NemotronEngine> engineLogger = loggerFactory.CreateLogger<NemotronEngine>();
 
 
-        if (args.Length > 0)
+        if (runOptions.TranscriptPath is not null)
         {
             try
             {
-                _fileWriter = new StreamWriter(args[0], append: true, Encoding.UTF8);
-                engineLogger.LogInformation($"[Config] Transcripts target file: {Path.GetFullPath(args[0])}");
+                _fileWriter = new StreamWriter(runOptions.TranscriptPath, append: true, Encoding.UTF8);
+                engineLogger.LogInformation($"[Config] Transcripts target file: {Path.GetFullPath(runOptions.TranscriptPath)}");
             }
             catch (Exception ex)
             {
@@ -128,8 +136,13 @@ class Program
             return 6;
         }
 
+        if (runOptions.Benchmark)
+            config.Audio.QueueCapacity = Math.Max(
+                config.Audio.QueueCapacity,
+                runOptions.BenchmarkChunks);
+
         IReadOnlyList<AudioInputDevice> audioDevices = ConsoleAudioInput.GetDevices();
-        if (audioDevices.Count == 0)
+        if (!runOptions.Benchmark && audioDevices.Count == 0)
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("[Audio] No input microphones found.");
@@ -147,7 +160,8 @@ class Program
 
         try
         {
-            if (DirectMlAdapterSelector.IsDirectMlRequested(config.Inference) &&
+            if (!runOptions.Benchmark &&
+                DirectMlAdapterSelector.IsDirectMlRequested(config.Inference) &&
                 OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
             {
                 IReadOnlyList<DirectMlAdapter> adapters =
@@ -165,10 +179,6 @@ class Program
                     engineLogger);
 
             PrintInferenceConfiguration(config.Inference, sessionFactories);
-
-            int deviceNumber = ConsoleAudioInput.SelectDeviceNumber(
-                audioDevices,
-                shutdownCts.Token);
 
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.WriteLine(
@@ -190,6 +200,23 @@ class Program
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.WriteLine("[Model] ONNX models ready.");
             Console.ResetColor();
+
+            if (runOptions.Benchmark)
+            {
+                await RunSyntheticBenchmarkAsync(
+                    engine,
+                    modelDefinition,
+                    config.Audio,
+                    runOptions.BenchmarkChunks,
+                    shutdownCts.Token);
+
+                engineLogger.LogInformation("[Application] Synthetic benchmark complete.");
+                return 0;
+            }
+
+            int deviceNumber = ConsoleAudioInput.SelectDeviceNumber(
+                audioDevices,
+                shutdownCts.Token);
 
             using WaveInEvent waveSource =
                 ConsoleAudioInput.CreateWaveSource(deviceNumber, config.Audio);
@@ -232,6 +259,122 @@ class Program
                 await _fileWriter.DisposeAsync();
         }
     }
+
+    private static RunOptions ParseRunOptions(string[] args)
+    {
+        if (args.Length == 0)
+            return new RunOptions(false, 20, null);
+
+        if (!string.Equals(args[0], "--benchmark", StringComparison.OrdinalIgnoreCase))
+            return new RunOptions(false, 20, args[0]);
+
+        int chunks = 20;
+        if (args.Length > 1 &&
+            (!int.TryParse(args[1], out chunks) || chunks <= 0))
+        {
+            throw new ArgumentException(
+                "--benchmark expects a positive chunk count.");
+        }
+
+        return new RunOptions(true, chunks, null);
+    }
+
+    private static async Task RunSyntheticBenchmarkAsync(
+        NemotronEngine engine,
+        NemotronModelDefinition modelDefinition,
+        AudioCaptureOptions audioOptions,
+        int chunks,
+        CancellationToken cancellationToken)
+    {
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine(
+            $"\n>>> Synthetic benchmark active. Processing {chunks} generated audio chunks. <<<\n");
+        Console.ResetColor();
+
+        int bytesPerSample = audioOptions.BitsPerSample / 8;
+        int bytesPerFrame = bytesPerSample * audioOptions.Channels;
+        int expectedBytes = modelDefinition.ChunkSamples * bytesPerFrame;
+        double phase = 0;
+        double phaseStep = 2 * Math.PI * 440 / audioOptions.SampleRate;
+
+        for (int i = 0; i < chunks; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            byte[] buffer = new byte[expectedBytes];
+            FillSineWaveChunk(buffer, audioOptions, modelDefinition.ChunkSamples, ref phase, phaseStep);
+            engine.ProcessAudioChunk(null, new WaveInEventArgs(buffer, buffer.Length));
+        }
+
+        await engine.StopAsync(cancellationToken);
+    }
+
+    private static void FillSineWaveChunk(
+        byte[] buffer,
+        AudioCaptureOptions audioOptions,
+        int samples,
+        ref double phase,
+        double phaseStep)
+    {
+        int bytesPerSample = audioOptions.BitsPerSample / 8;
+        int bytesPerFrame = bytesPerSample * audioOptions.Channels;
+
+        for (int sampleIndex = 0; sampleIndex < samples; sampleIndex++)
+        {
+            float sample = (float)(Math.Sin(phase) * 0.25);
+            phase += phaseStep;
+
+            for (int channel = 0; channel < audioOptions.Channels; channel++)
+            {
+                int offset = sampleIndex * bytesPerFrame + channel * bytesPerSample;
+                WritePcmSample(buffer, offset, audioOptions.BitsPerSample, sample);
+            }
+        }
+    }
+
+    private static void WritePcmSample(
+        byte[] buffer,
+        int offset,
+        int bitsPerSample,
+        float sample)
+    {
+        switch (bitsPerSample)
+        {
+            case 8:
+                buffer[offset] = (byte)Math.Clamp((int)Math.Round(sample * 127 + 128), 0, 255);
+                break;
+            case 16:
+                BitConverter.TryWriteBytes(
+                    buffer.AsSpan(offset, 2),
+                    (short)Math.Clamp((int)Math.Round(sample * 32767), short.MinValue, short.MaxValue));
+                break;
+            case 24:
+                int sample24 = Math.Clamp(
+                    (int)Math.Round(sample * 8388607),
+                    -8388608,
+                    8388607);
+                buffer[offset] = (byte)(sample24 & 0xFF);
+                buffer[offset + 1] = (byte)((sample24 >> 8) & 0xFF);
+                buffer[offset + 2] = (byte)((sample24 >> 16) & 0xFF);
+                break;
+            case 32:
+                BitConverter.TryWriteBytes(
+                    buffer.AsSpan(offset, 4),
+                    Math.Clamp(
+                        (int)Math.Round(sample * int.MaxValue),
+                        int.MinValue,
+                        int.MaxValue));
+                break;
+            default:
+                throw new NotSupportedException(
+                    $"PCM bit depth '{bitsPerSample}' is not supported.");
+        }
+    }
+
+    private sealed record RunOptions(
+        bool Benchmark,
+        int BenchmarkChunks,
+        string? TranscriptPath);
 
 
     /// <summary>
@@ -309,6 +452,10 @@ class Program
         Console.WriteLine($"  Device id          : {options.DeviceId}");
         Console.WriteLine($"  CPU fallback       : {options.AllowCpuFallback}");
         Console.WriteLine($"  Profiling          : {options.EnableProfiling}");
+        Console.WriteLine($"  ORT log severity   : {options.LogSeverityLevel ?? "default"}");
+        Console.WriteLine(
+            $"  ORT log verbosity  : " +
+            $"{(options.LogVerbosityLevel.HasValue ? options.LogVerbosityLevel.Value.ToString() : "default")}");
         Console.WriteLine(
             $"  GPU memory limit   : " +
             $"{(options.GpuMemoryLimitMiB.HasValue ? $"{options.GpuMemoryLimitMiB} MiB" : "not set")}");

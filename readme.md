@@ -25,7 +25,7 @@ Las invariantes que deben preservarse al modificar audio, tensores ONNX, concurr
 - Conexión a Internet durante la primera descarga del modelo.
 - Espacio en disco suficiente para los archivos ONNX y sus datos externos.
 
-La implementación actual soporta dos variantes excluyentes de ONNX Runtime: CPU y DirectML. La variante se elige al compilar con `OnnxRuntimeFlavor`.
+La implementación actual soporta tres variantes excluyentes de ONNX Runtime: CPU, DirectML y WindowsML. La variante se elige al compilar con `OnnxRuntimeFlavor`.
 
 ## Inicio rápido
 
@@ -61,7 +61,9 @@ Ejemplo:
     "DeviceId": 0,
     "GpuMemoryLimitMiB": null,
     "AllowCpuFallback": true,
-    "EnableProfiling": false
+    "EnableProfiling": false,
+    "LogSeverityLevel": "Verbose",
+    "LogVerbosityLevel": 5
   },
   "Nemotron": {
     "LanguageId": 101,
@@ -87,6 +89,15 @@ dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=DirectMl
 ```
 
 También se debe establecer `"ExecutionProvider": "DirectMl"` en `VoiceAppConfig.json`. La variante DirectML usa `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4; la variante CPU continúa usando ONNX Runtime 1.27.0.
+
+La variante WindowsML permite comparar el runtime de `Microsoft.Windows.AI.MachineLearning` sin cambiar el pipeline de inferencia:
+
+```powershell
+dotnet restore src/VoiceScribe.Console/VoiceScribe.Console.csproj -p:OnnxRuntimeFlavor=WindowsMl
+dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=WindowsMl
+```
+
+También se debe establecer `"ExecutionProvider": "DirectMl"` en `VoiceAppConfig.json`. Esta variante usa `Microsoft.Windows.AI.MachineLearning` 2.1.71 y compila con `net10.0-windows10.0.18362.0`, mínimo requerido por ese paquete. El código de inferencia sigue usando las APIs `Microsoft.ML.OnnxRuntime`; la diferencia medida es la distribución/runtime subyacente.
 
 Con la exportación INT4 actual, decoder y joint crean sesiones DirectML, pero el encoder falla al inicializar el proveedor. Con `AllowCpuFallback: true`, el encoder se recrea explícitamente en CPU y se registra una advertencia. Por ello, esta modalidad es actualmente híbrida.
 
@@ -126,11 +137,49 @@ La salida se escribe progresivamente y se vacía después de procesar cada bloqu
 dotnet build VoiceScribe.sln
 ```
 
+Compilar variantes específicas:
+
+```powershell
+dotnet build VoiceScribe.sln -p:OnnxRuntimeFlavor=Cpu
+dotnet build VoiceScribe.sln -p:OnnxRuntimeFlavor=DirectMl
+dotnet build VoiceScribe.sln -p:OnnxRuntimeFlavor=WindowsMl
+```
+
 Ejecutar las pruebas:
 
 ```powershell
 dotnet test VoiceScribe.sln
 ```
+
+Ejecutar pruebas por variante:
+
+```powershell
+dotnet test VoiceScribe.sln -p:OnnxRuntimeFlavor=Cpu
+dotnet test VoiceScribe.sln -p:OnnxRuntimeFlavor=DirectMl
+dotnet test VoiceScribe.sln -p:OnnxRuntimeFlavor=WindowsMl
+```
+
+## Comparación de rendimiento
+
+Para comparar DirectML clásico contra WindowsML, usa el mismo `VoiceAppConfig.json` y el mismo adaptador. La consola imprime la variante activa en `Runtime flavor` y reporta métricas periódicas del pipeline: extracción de características, encoder, decoder, joint, bucle de decodificación y tiempo total por bloque.
+
+El modo benchmark evita depender del micrófono. Genera audio PCM determinístico y lo procesa por el mismo `NemotronEngine`:
+
+Ejecuta primero DirectML:
+
+```powershell
+dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=DirectMl -- --benchmark 20
+```
+
+Luego ejecuta WindowsML:
+
+```powershell
+dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=WindowsMl -- --benchmark 20
+```
+
+Para comparar captura real, omite `--benchmark 20` y usa el mismo micrófono y frase en ambas ejecuciones. En ambos casos confirma en los logs si `encoder.onnx`, `decoder.onnx` o `joint.onnx` caen a CPU. Si la política de fallback difiere entre variantes, compara los tiempos por sesión, no solo el tiempo total por bloque.
+
+En una primera medición local con 20 bloques sintéticos y configuración `encoder=Cpu, decoder=DirectMl, joiner=DirectMl`, DirectML clásico promedió `332.7 ms` por bloque y WindowsML promedió `295.0 ms` por bloque. Esta muestra favorece WindowsML, pero conviene repetir con más bloques antes de decidir.
 
 La solución contiene tres proyectos:
 
@@ -246,11 +295,38 @@ El archivo `VoiceAppConfig.json` se copia al directorio de salida al compilar.
 | `Inference.GpuMemoryLimitMiB` | Límite opcional de VRAM. Se valida, pero actualmente no se aplica en DirectML. |
 | `Inference.AllowCpuFallback` | Permite recrear en CPU una sesión GPU que no pueda inicializarse. |
 | `Inference.EnableProfiling` | Activa el perfil de ONNX Runtime. |
+| `Inference.LogSeverityLevel` | Nivel opcional de logs de ONNX Runtime: `Verbose`, `Info`, `Warning`, `Error` o `Fatal`. Con `null`, usa el valor predeterminado de ONNX Runtime. |
+| `Inference.LogVerbosityLevel` | Verbosidad opcional de ONNX Runtime. Es útil principalmente con `LogSeverityLevel: "Verbose"`. |
 | `Nemotron.LanguageId` | Identificador de idioma enviado al encoder; valor predeterminado: `101`. |
 | `Nemotron.MaxSymbolsPerStep` | Sobrescritura opcional del máximo de tokens por frame. Con `null`, se usa el contrato del modelo. |
 | `Nemotron.BlankId` | Sobrescritura opcional del token blank. Con `null`, se usa el contrato del modelo. |
 
 Si el archivo no existe o no puede deserializarse, se usa la configuración predeterminada definida en `Program.cs`. Antes de iniciar la captura se valida que la frecuencia y las muestras por bloque coincidan con el contrato del modelo. Una configuración incompatible detiene el arranque.
+
+## Logging
+
+El nivel de logging de la aplicación se configura con el archivo estándar `appsettings.json`, que también se copia al directorio de salida. La sección usada por `Microsoft.Extensions.Logging` es `Logging`.
+
+Ejemplo:
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Trace",
+      "Microsoft": "Warning",
+      "System": "Warning"
+    },
+    "Console": {
+      "LogLevel": {
+        "Default": "Trace"
+      }
+    }
+  }
+}
+```
+
+Esto controla el logging administrado de la aplicación. Los logs nativos de ONNX Runtime se controlan por separado desde `VoiceAppConfig.json`, mediante `Inference.LogSeverityLevel` e `Inference.LogVerbosityLevel`.
 
 ## Estructura del repositorio
 
@@ -260,6 +336,7 @@ VoiceScribe/
 ├── src/
 │   ├── VoiceScribe.Console/
 │   │   ├── Program.cs
+│   │   ├── appsettings.json
 │   │   ├── VoiceAppConfig.json
 │   │   └── VoiceScribe.Console.csproj
 │   └── VoiceScribe.Core/
@@ -281,8 +358,11 @@ VoiceScribe/
 | Paquete | Uso |
 | --- | --- |
 | `Microsoft.ML.OnnxRuntime` | Ejecución de los grafos ONNX. |
+| `Microsoft.ML.OnnxRuntime.DirectML` | Variante DirectML clásica. |
+| `Microsoft.Windows.AI.MachineLearning` | Variante experimental WindowsML para comparar el runtime ONNX/DirectML distribuido por Windows ML. |
 | `NAudio` | Enumeración de dispositivos y captura de audio en Windows. |
 | `Microsoft.Extensions.Logging` | Registro de eventos y errores. |
+| `Microsoft.Extensions.Configuration` | Lectura de `appsettings.json` para configuración estándar de logging. |
 
 Las versiones exactas se encuentran en los archivos `.csproj`.
 
@@ -306,7 +386,7 @@ Las versiones exactas se encuentran en los archivos `.csproj`.
 - El contrato depende de la estructura de `genai_config.json` incluida con esta familia de exportaciones.
 - Se omiten bloques cuyo pico de amplitud sea inferior a `0.003`.
 - No hay beam search, timestamps, separación por hablante, puntuación de confianza ni segmentación formal de frases.
-- El nivel de logging predeterminado es `Warning`; los diagnósticos `Information` y `Debug` no aparecen sin modificar la configuración del logger.
+- El nivel de logging administrado se configura en `appsettings.json`; los logs nativos de ONNX Runtime se configuran en `VoiceAppConfig.json`.
 - No existe todavía una validación comparativa del preprocesamiento frente a la implementación original del modelo ni una prueba automatizada integral con los tres grafos ONNX.
 
 ## Solución de problemas
@@ -332,7 +412,7 @@ Comprueba:
 - Que los archivos correspondan exactamente a la exportación esperada.
 - Que las formas y nombres de entrada/salida ONNX coincidan con los usados por `NemotronEngine`.
 
-Para inspeccionar más información, cambia temporalmente el nivel mínimo de logging de `Warning` a `Information` o `Debug` en `Program.cs`.
+Para inspeccionar más información, cambia temporalmente el nivel mínimo de logging en `appsettings.json`. Para logs nativos de ONNX Runtime, ajusta `Inference.LogSeverityLevel` e `Inference.LogVerbosityLevel` en `VoiceAppConfig.json`.
 
 ## Licencia y modelo
 

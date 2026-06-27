@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<TargetFramework>net10.0-windows</TargetFramework>
+		<TargetFramework>$(VoiceScribeTargetFramework)</TargetFramework>
 		<RootNamespace>VoiceScribe.Core</RootNamespace>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -10,6 +10,10 @@
 
 	<PropertyGroup Condition="'$(OnnxRuntimeFlavor)' == 'DirectMl'">
 		<DefineConstants>$(DefineConstants);VOICESCRIBE_ONNXRUNTIME_DIRECTML</DefineConstants>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(OnnxRuntimeFlavor)' == 'WindowsMl'">
+		<DefineConstants>$(DefineConstants);VOICESCRIBE_ONNXRUNTIME_WINDOWSML;VOICESCRIBE_ONNXRUNTIME_DIRECTML</DefineConstants>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -25,10 +29,14 @@
 		<PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" />
 	</ItemGroup>
 
+	<ItemGroup Condition="'$(OnnxRuntimeFlavor)' == 'WindowsMl'">
+		<PackageReference Include="Microsoft.Windows.AI.MachineLearning" Version="2.1.71" />
+	</ItemGroup>
+
 	<Target Name="ValidateOnnxRuntimeFlavor" BeforeTargets="PrepareForBuild">
 		<Error
-			Condition="'$(OnnxRuntimeFlavor)' != 'Cpu' and '$(OnnxRuntimeFlavor)' != 'DirectMl'"
-			Text="Unsupported OnnxRuntimeFlavor '$(OnnxRuntimeFlavor)'. Supported values: Cpu, DirectMl." />
+			Condition="'$(OnnxRuntimeFlavor)' != 'Cpu' and '$(OnnxRuntimeFlavor)' != 'DirectMl' and '$(OnnxRuntimeFlavor)' != 'WindowsMl'"
+			Text="Unsupported OnnxRuntimeFlavor '$(OnnxRuntimeFlavor)'. Supported values: Cpu, DirectMl, WindowsMl." />
 	</Target>
 
 </Project>

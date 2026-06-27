@@ -11,13 +11,15 @@
   },
   "Inference": {
     "ExecutionProvider": "DirectMl",
-    "EncoderProvider": "Cpu",
+    "EncoderProvider": null,
     "DecoderProvider": null,
     "JoinerProvider": null,
     "DeviceId": 0,
     "GpuMemoryLimitMiB": null,
     "AllowCpuFallback": true,
-    "EnableProfiling": false
+    "EnableProfiling": false,
+    "LogSeverityLevel": "Error",
+    "LogVerbosityLevel": 2
   },
   "Nemotron": {
     "LanguageId": 101,
