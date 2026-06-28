@@ -24,52 +24,22 @@ public sealed class OnnxSessionFactoryResolverTests
     }
 
     [Fact]
-    public void Create_HandlesDirectMlAccordingToRuntimeVariant()
+    public void Create_ReturnsDirectMlFactoryForDirectMlProvider()
     {
         var options = new OnnxRuntimeOptions
         {
             ExecutionProvider = OnnxExecutionProvider.DirectMl
         };
 
-        if (OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
-        {
-            IOnnxSessionFactory factory =
-                OnnxSessionFactoryResolver.Create(
-                    options,
-                    NullLogger.Instance);
-
-            Assert.Equal(
-                OnnxExecutionProvider.DirectMl,
-                factory.ExecutionProvider);
-            Assert.Equal("DirectMlOnnxSessionFactory", factory.GetType().Name);
-        }
-        else
-        {
-            NotSupportedException exception =
-                Assert.Throws<NotSupportedException>(
-                    () => OnnxSessionFactoryResolver.Create(
-                        options,
-                        NullLogger.Instance));
-
-            Assert.Contains("runtime variant", exception.Message);
-        }
-    }
-
-    [Fact]
-    public void Create_RejectsCuda()
-    {
-        var options = new OnnxRuntimeOptions
-        {
-            ExecutionProvider = OnnxExecutionProvider.Cuda
-        };
-
-        NotSupportedException exception =
-            Assert.Throws<NotSupportedException>(
-                () => OnnxSessionFactoryResolver.Create(
+        IOnnxSessionFactory factory =
+            OnnxSessionFactoryResolver.Create(
                 options,
-                NullLogger.Instance));
+                NullLogger.Instance);
 
-        Assert.Contains("runtime variant", exception.Message);
+        Assert.Equal(
+            OnnxExecutionProvider.DirectMl,
+            factory.ExecutionProvider);
+        Assert.IsType<DirectMlOnnxSessionFactory>(factory);
     }
 
     [Fact]
@@ -83,26 +53,13 @@ public sealed class OnnxSessionFactoryResolverTests
             JoinerProvider = OnnxExecutionProvider.DirectMl
         };
 
-        if (OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
-        {
-            NemotronOnnxSessionFactories factories =
-                OnnxSessionFactoryResolver.CreateForNemotron(
-                    options,
-                    NullLogger.Instance);
+        NemotronOnnxSessionFactories factories =
+            OnnxSessionFactoryResolver.CreateForNemotron(
+                options,
+                NullLogger.Instance);
 
-            Assert.Equal(OnnxExecutionProvider.Cpu, factories.Encoder.ExecutionProvider);
-            Assert.Equal(OnnxExecutionProvider.Cpu, factories.Decoder.ExecutionProvider);
-            Assert.Equal(OnnxExecutionProvider.DirectMl, factories.Joiner.ExecutionProvider);
-        }
-        else
-        {
-            NotSupportedException exception =
-                Assert.Throws<NotSupportedException>(
-                    () => OnnxSessionFactoryResolver.CreateForNemotron(
-                        options,
-                        NullLogger.Instance));
-
-            Assert.Contains("runtime variant", exception.Message);
-        }
+        Assert.Equal(OnnxExecutionProvider.Cpu, factories.Encoder.ExecutionProvider);
+        Assert.Equal(OnnxExecutionProvider.Cpu, factories.Decoder.ExecutionProvider);
+        Assert.Equal(OnnxExecutionProvider.DirectMl, factories.Joiner.ExecutionProvider);
     }
 }

@@ -1,4 +1,3 @@
-#if VOICESCRIBE_ONNXRUNTIME_DIRECTML
 using Microsoft.Extensions.Logging;
 using Microsoft.ML.OnnxRuntime;
 using VoiceScribe.Core.Configuration;
@@ -58,8 +57,8 @@ public sealed class DirectMlOnnxSessionFactory : IOnnxSessionFactory
         sessionOptions.AppendExecutionProvider_DML(_options.DeviceId);
 
         _logger.LogInformation(
-            "Creating DirectML ONNX session via {RuntimeVariant} runtime for {ModelPath} on device {DeviceId}.",
-            OnnxRuntimeVariant.Name,
+            "Creating DirectML ONNX session via {Runtime} runtime for {ModelPath} on device {DeviceId}.",
+            OnnxRuntimeInfo.Name,
             modelPath,
             _options.DeviceId);
 
@@ -78,4 +77,3 @@ public sealed class DirectMlOnnxSessionFactory : IOnnxSessionFactory
             : exception.GetType().Name;
     }
 }
-#endif

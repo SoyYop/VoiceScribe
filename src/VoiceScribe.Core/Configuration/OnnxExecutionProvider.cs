@@ -6,6 +6,5 @@ namespace VoiceScribe.Core.Configuration;
 public enum OnnxExecutionProvider
 {
     Cpu,
-    DirectMl,
-    Cuda
+    DirectMl
 }

@@ -5,7 +5,7 @@ using VoiceScribe.Core.Configuration;
 namespace VoiceScribe.Core.Engine;
 
 /// <summary>
-/// Creates sessions backed by the standard ONNX Runtime CPU package.
+/// Creates sessions using the default CPU execution provider in the current runtime.
 /// </summary>
 public sealed class CpuOnnxSessionFactory : IOnnxSessionFactory
 {

@@ -1,4 +1,5 @@
 using NAudio.Wave;
+using VoiceScribe.Console;
 using VoiceScribe.Core.Configuration;
 
 namespace VoiceScribe.Console.Audio;
@@ -37,9 +38,7 @@ internal static class ConsoleAudioInput
             return devices[0].Number;
         }
 
-        System.Console.ForegroundColor = ConsoleColor.Yellow;
-        System.Console.WriteLine("\n[Audio] Multiple input microphones found:");
-        System.Console.ResetColor();
+        ConsoleOutput.WriteLine("\n[Audio] Multiple input microphones found:", ConsoleColor.Yellow);
 
         foreach (AudioInputDevice device in devices)
         {
@@ -51,9 +50,7 @@ internal static class ConsoleAudioInput
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            System.Console.ForegroundColor = ConsoleColor.Yellow;
-            System.Console.Write("\nSelect microphone number: ");
-            System.Console.ResetColor();
+            ConsoleOutput.Write("\nSelect microphone number: ", ConsoleColor.Yellow);
 
             string? input = System.Console.ReadLine();
             cancellationToken.ThrowIfCancellationRequested();
@@ -69,9 +66,7 @@ internal static class ConsoleAudioInput
                 }
             }
 
-            System.Console.ForegroundColor = ConsoleColor.Red;
-            System.Console.WriteLine("[Audio] Invalid microphone number. Try again.");
-            System.Console.ResetColor();
+            ConsoleOutput.WriteLine("[Audio] Invalid microphone number. Try again.", ConsoleColor.Red);
         }
     }
 
@@ -90,9 +85,8 @@ internal static class ConsoleAudioInput
 
     private static void WriteSelectedDevice(AudioInputDevice device)
     {
-        System.Console.ForegroundColor = ConsoleColor.Green;
-        System.Console.WriteLine(
-            $"[Audio] Microphone selected: {device.Number} - {device.ProductName}");
-        System.Console.ResetColor();
+        ConsoleOutput.WriteLine(
+            $"[Audio] Microphone selected: {device.Number} - {device.ProductName}",
+            ConsoleColor.Green);
     }
 }

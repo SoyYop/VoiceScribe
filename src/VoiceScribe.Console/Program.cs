@@ -1,6 +1,5 @@
 ﻿using System;
 using System.IO;
-using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -8,6 +7,7 @@ using Microsoft.Extensions.Logging;
 
 using NAudio.Wave;
 
+using VoiceScribe.Console;
 using VoiceScribe.Console.Audio;
 using VoiceScribe.Console.Benchmark;
 using VoiceScribe.Console.CommandLine;
@@ -46,33 +46,11 @@ class Program
         Console.WriteLine("  A 'Simple' NVIDIA Nemotron-3.5-ASR Real-Time C# Engine    ");
         Console.WriteLine("============================================================");
 
-        IConfiguration appSettings = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
-            .Build();
-
-        // Inicialización del logging factory stand-alone
-        using var loggerFactory = LoggerFactory.Create(builder =>
-        {
-            builder.AddConfiguration(appSettings.GetSection("Logging"));
-            builder.AddConsole();
-        });
+        using ILoggerFactory loggerFactory = CreateLoggerFactory();
         ILogger<NemotronEngine> engineLogger = loggerFactory.CreateLogger<NemotronEngine>();
 
-        StreamWriter? transcriptWriter = null;
-
-        if (runOptions.TranscriptPath is not null)
-        {
-            try
-            {
-                transcriptWriter = new StreamWriter(runOptions.TranscriptPath, append: true, Encoding.UTF8);
-                engineLogger.LogInformation($"[Config] Transcripts target file: {Path.GetFullPath(runOptions.TranscriptPath)}");
-            }
-            catch (Exception ex)
-            {
-                engineLogger.LogWarning($"[Warning] File init failed: {ex.Message}. Screen output only.");
-            }
-        }
+        StreamWriter? transcriptWriter =
+            OpenTranscriptWriter(runOptions, engineLogger);
 
 
         var configPath = Path.Combine(AppContext.BaseDirectory, "VoiceAppConfig.json");
@@ -96,14 +74,17 @@ class Program
 
         if (string.IsNullOrWhiteSpace(config.ModelDownloadsPath))
         {
-            engineLogger.LogError($"[Error] Model downloads path set to: {config.ModelDownloadsPath}");
+            engineLogger.LogError(
+                "[Error] Model downloads path set to: {Path}",
+                config.ModelDownloadsPath);
             return 3;
         }
 
 
-        if (!await EnsureModelsDownloadedAsync(engineLogger, config))
+        if (!await ModelAssetBootstrapper.EnsureDownloadedAsync(engineLogger, config))
         {
-            engineLogger.LogError($"[Error] Model files are missing and were not downloaded. Exiting.");
+            engineLogger.LogError(
+                "[Error] Model files are missing and were not downloaded. Exiting.");
             return 4;
         }
 
@@ -139,9 +120,7 @@ class Program
         IReadOnlyList<AudioInputDevice> audioDevices = ConsoleAudioInput.GetDevices();
         if (!runOptions.Benchmark && audioDevices.Count == 0)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("[Audio] No input microphones found.");
-            Console.ResetColor();
+            ConsoleOutput.WriteLine("[Audio] No input microphones found.", ConsoleColor.Red);
             return 10;
         }
 
@@ -156,8 +135,7 @@ class Program
         try
         {
             if (!runOptions.Benchmark &&
-                DirectMlAdapterSelector.IsDirectMlRequested(config.Inference) &&
-                OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
+                DirectMlAdapterSelector.IsDirectMlRequested(config.Inference))
             {
                 IReadOnlyList<DirectMlAdapter> adapters =
                     DirectMlAdapterSelector.GetAdapters();
@@ -173,13 +151,12 @@ class Program
                     config.Inference,
                     engineLogger);
 
-            PrintInferenceConfiguration(config.Inference, sessionFactories);
+            InferenceConfigurationPrinter.Print(config.Inference, sessionFactories);
 
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine(
+            ConsoleOutput.WriteLine(
                 $"[Model] Loading ONNX models with " +
-                $"{sessionFactories.Describe()}...");
-            Console.ResetColor();
+                $"{sessionFactories.Describe()}...",
+                ConsoleColor.DarkGray);
 
             await using NemotronEngine engine =
                 new(
@@ -192,9 +169,7 @@ class Program
                     transcriptWriter);
             shutdownCts.Token.ThrowIfCancellationRequested();
 
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("[Model] ONNX models ready.");
-            Console.ResetColor();
+            ConsoleOutput.WriteLine("[Model] ONNX models ready.", ConsoleColor.DarkGray);
 
             if (runOptions.Benchmark)
             {
@@ -218,9 +193,9 @@ class Program
 
             waveSource.DataAvailable += engine.ProcessAudioChunk;
 
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine("\n>>> Microphones active. Speak clearly. Press [ENTER] to exit pipeline <<<\n");
-            Console.ResetColor();
+            ConsoleOutput.WriteLine(
+                "\n>>> Microphones active. Speak clearly. Press [ENTER] to exit pipeline <<<\n",
+                ConsoleColor.Cyan);
 
             engineLogger.LogInformation("[Application] Starting audio capture and processing loop.");
 
@@ -255,103 +230,43 @@ class Program
         }
     }
 
-
-    /// <summary>
-    /// Ensures that all required model files are present in the local directory. If any files are missing, it prompts the user to 
-    /// download them from the specified repository URL. If the user agrees, it uses the ModelDownloader to fetch the missing files.
-    /// If the user declines, it logs an error and returns false, indicating that the application cannot proceed without the necessary
-    ///  model assets.
-    /// </summary>
-    /// <param name="engineLogger"></param>
-    /// <param name="config"></param>
-    /// <returns></returns>
-    private static async Task<bool> EnsureModelsDownloadedAsync(ILogger<NemotronEngine> engineLogger, VoiceAppConfig config)
+    private static ILoggerFactory CreateLoggerFactory()
     {
-        ModelDownloader md = new(config.RepoUrl, config.ModelDownloadsPath!);
-        if (!md.VerifyLocalWeights(config.ModelFiles))
+        IConfiguration appSettings = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+            .Build();
+
+        return LoggerFactory.Create(builder =>
         {
-            engineLogger.LogError($"[Error] Model files are missing, asking to download.");
-
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.Write("\n[Missing Assets] Nemotron model layers missing. Download? (y/n): ");
-            Console.ResetColor();
-
-            if (char.ToLower(Console.ReadKey().KeyChar) == 'y')
-            {
-                Console.WriteLine();
-
-                using var downloadCts = new CancellationTokenSource();
-                ConsoleCancelEventHandler cancelDownload = (_, eventArgs) =>
-                {
-                    eventArgs.Cancel = true;
-                    downloadCts.Cancel();
-                };
-                Console.CancelKeyPress += cancelDownload;
-
-                using var httpClient = new HttpClient();
-                try
-                {
-                    await md.HandleModelDownload(
-                        httpClient,
-                        config.ModelFiles,
-                        downloadCts.Token);
-                    engineLogger.LogInformation("[Config] Model files downloaded.");
-                }
-                catch (OperationCanceledException)
-                {
-                    engineLogger.LogWarning("[Config] Model download cancelled.");
-                    return false;
-                }
-                finally
-                {
-                    Console.CancelKeyPress -= cancelDownload;
-                }
-            }
-            else
-            {
-                engineLogger.LogInformation($"[Config] User declined to download Model files, exiting.");
-                return false;
-            }
-
-        }
-        return true;
+            builder.AddConfiguration(appSettings.GetSection("Logging"));
+            builder.AddConsole();
+        });
     }
 
-    private static void PrintInferenceConfiguration(
-        OnnxRuntimeOptions options,
-        NemotronOnnxSessionFactories sessionFactories)
+    private static StreamWriter? OpenTranscriptWriter(
+        RunOptions runOptions,
+        ILogger logger)
     {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("[Inference] Current configuration:");
-        Console.WriteLine($"  Runtime flavor     : {OnnxRuntimeVariant.Name}");
-        Console.WriteLine($"  Default provider   : {options.ExecutionProvider}");
-        Console.WriteLine($"  Encoder provider   : {sessionFactories.Encoder.ExecutionProvider}");
-        Console.WriteLine($"  Decoder provider   : {sessionFactories.Decoder.ExecutionProvider}");
-        Console.WriteLine($"  Joiner provider    : {sessionFactories.Joiner.ExecutionProvider}");
-        Console.WriteLine($"  Device id          : {options.DeviceId}");
-        Console.WriteLine($"  CPU fallback       : {options.AllowCpuFallback}");
-        Console.WriteLine($"  Profiling          : {options.EnableProfiling}");
-        Console.WriteLine($"  ORT log severity   : {options.LogSeverityLevel ?? "default"}");
-        Console.WriteLine(
-            $"  ORT log verbosity  : " +
-            $"{(options.LogVerbosityLevel.HasValue ? options.LogVerbosityLevel.Value.ToString() : "default")}");
-        Console.WriteLine(
-            $"  GPU memory limit   : " +
-            $"{(options.GpuMemoryLimitMiB.HasValue ? $"{options.GpuMemoryLimitMiB} MiB" : "not set")}");
+        if (runOptions.TranscriptPath is null)
+            return null;
 
-        if ((IsGpuProvider(sessionFactories.Encoder.ExecutionProvider) ||
-             IsGpuProvider(sessionFactories.Decoder.ExecutionProvider) ||
-             IsGpuProvider(sessionFactories.Joiner.ExecutionProvider)) &&
-            options.AllowCpuFallback)
+        try
         {
-            Console.WriteLine(
-                "  Note               : individual models may fall back to CPU if the GPU provider cannot initialize them.");
+            var writer =
+                new StreamWriter(runOptions.TranscriptPath, append: true, Encoding.UTF8);
+            logger.LogInformation(
+                "[Config] Transcripts target file: {Path}",
+                Path.GetFullPath(runOptions.TranscriptPath));
+            return writer;
         }
-
-        Console.ResetColor();
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                "[Warning] File init failed: {Reason}. Screen output only.",
+                ex.Message);
+            return null;
+        }
     }
-
-    private static bool IsGpuProvider(OnnxExecutionProvider provider) =>
-        provider is OnnxExecutionProvider.DirectMl or OnnxExecutionProvider.Cuda;
 
 }

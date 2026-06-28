@@ -40,6 +40,23 @@ La exportación utilizada está compuesta por:
 
 Si cambia la estructura de `genai_config.json`, debe adaptarse el parser y fallar durante el arranque con un mensaje claro. No se debe continuar con un contrato parcial.
 
+## Runtime ONNX
+
+VoiceScribe usa WindowsML como único runtime ONNX mediante `Microsoft.Windows.AI.MachineLearning`. No deben reintroducirse builds separados para `Microsoft.ML.OnnxRuntime`, `Microsoft.ML.OnnxRuntime.DirectML` o `Microsoft.ML.OnnxRuntime.Gpu` sin una rama experimental y mediciones comparativas.
+
+`Inference.ExecutionProvider` no representa paquetes NuGet ni flavors de compilación. Solo puede seleccionar proveedores disponibles dentro de WindowsML:
+
+- `Cpu`.
+- `DirectMl`.
+
+El proveedor CPU está incluido en WindowsML. El fallback de DirectML a CPU debe seguir creando una sesión sin registrar explícitamente DirectML, no agregando un paquete CPU separado.
+
+Si se retoma otro runtime en el futuro:
+
+- No se deben mezclar paquetes ONNX Runtime alternativos en el mismo output.
+- Deben actualizarse `readme.md`, `vram.md`, pruebas de factories y validación de configuración.
+- Debe medirse con `--benchmark` y con micrófono real antes de promover el cambio.
+
 ## Audio
 
 La captura debe cumplir:

@@ -8,7 +8,6 @@ public sealed class OnnxRuntimeOptionsTests
     [Theory]
     [InlineData("Cpu", OnnxExecutionProvider.Cpu)]
     [InlineData("directml", OnnxExecutionProvider.DirectMl)]
-    [InlineData("CUDA", OnnxExecutionProvider.Cuda)]
     public void ExecutionProvider_DeserializesFromString(
         string jsonValue,
         OnnxExecutionProvider expected)
@@ -19,6 +18,17 @@ public sealed class OnnxRuntimeOptionsTests
 
         Assert.NotNull(options);
         Assert.Equal(expected, options.ExecutionProvider);
+    }
+
+    [Fact]
+    public void ExecutionProvider_RejectsUnsupportedProviderName()
+    {
+        JsonException exception =
+            Assert.Throws<JsonException>(
+                () => JsonSerializer.Deserialize<OnnxRuntimeOptions>(
+                    """{"ExecutionProvider":"CUDA"}"""));
+
+        Assert.Contains("OnnxExecutionProvider", exception.Message);
     }
 
     [Fact]

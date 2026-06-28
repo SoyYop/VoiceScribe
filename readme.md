@@ -25,7 +25,7 @@ Las invariantes que deben preservarse al modificar audio, tensores ONNX, concurr
 - Conexión a Internet durante la primera descarga del modelo.
 - Espacio en disco suficiente para los archivos ONNX y sus datos externos.
 
-La implementación actual soporta tres variantes excluyentes de ONNX Runtime: CPU, DirectML y WindowsML. La variante se elige al compilar con `OnnxRuntimeFlavor`.
+La implementación actual usa WindowsML como único runtime ONNX. Dentro de ese runtime se puede seleccionar `Cpu` o `DirectMl` como proveedor de ejecución mediante `VoiceAppConfig.json`. WindowsML incluye el proveedor CPU, por lo que el fallback no requiere un paquete CPU separado.
 
 ## Inicio rápido
 
@@ -81,29 +81,13 @@ Ejecutar la aplicación:
 dotnet run --project src/VoiceScribe.Console
 ```
 
-La variante DirectML usa una distribución nativa diferente de ONNX Runtime. Para compilarla y ejecutarla:
-
-```powershell
-dotnet restore src/VoiceScribe.Console/VoiceScribe.Console.csproj -p:OnnxRuntimeFlavor=DirectMl
-dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=DirectMl
-```
-
-También se debe establecer `"ExecutionProvider": "DirectMl"` en `VoiceAppConfig.json`. La variante DirectML usa `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4; la variante CPU continúa usando ONNX Runtime 1.27.0.
-
-La variante WindowsML permite comparar el runtime de `Microsoft.Windows.AI.MachineLearning` sin cambiar el pipeline de inferencia:
-
-```powershell
-dotnet restore src/VoiceScribe.Console/VoiceScribe.Console.csproj -p:OnnxRuntimeFlavor=WindowsMl
-dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=WindowsMl
-```
-
-También se debe establecer `"ExecutionProvider": "DirectMl"` en `VoiceAppConfig.json`. Esta variante usa `Microsoft.Windows.AI.MachineLearning` 2.1.71 y compila con `net10.0-windows10.0.18362.0`, mínimo requerido por ese paquete. El código de inferencia sigue usando las APIs `Microsoft.ML.OnnxRuntime`; la diferencia medida es la distribución/runtime subyacente.
+Para usar aceleración por GPU se debe establecer `"ExecutionProvider": "DirectMl"` en `VoiceAppConfig.json`. Para forzar CPU, usar `"ExecutionProvider": "Cpu"`. El runtime subyacente en ambos casos es `Microsoft.Windows.AI.MachineLearning` 2.1.71 y el proyecto compila con `net10.0-windows10.0.18362.0`, mínimo requerido por ese paquete.
 
 Con la exportación INT4 actual, decoder y joint crean sesiones DirectML, pero el encoder falla al inicializar el proveedor. Con `AllowCpuFallback: true`, el encoder se recrea explícitamente en CPU y se registra una advertencia. Por ello, esta modalidad es actualmente híbrida.
 
 Si hay más de un adaptador compatible con DirectML, la consola muestra una selección antes de cargar los modelos. El número elegido se guarda en memoria como `Inference.DeviceId` para esa ejecución.
 
-CUDA no se incluye como variante soportada en esta rama. La prueba con `Microsoft.ML.OnnxRuntime.Gpu` 1.27.0, CUDA 13.3 y cuDNN 9.23 cargó las DLL nativas, pero falló en `cublasCreate` con la GTX 1050 por requerir una característica arquitectónica ausente. Para reducir dependencias y mantener un perfil funcional en esta GPU, DirectML queda como acelerador recomendado.
+CUDA y el paquete DirectML clásico no se incluyen como variantes soportadas. Si se necesita reintroducir un runtime alternativo, debe hacerse como rama experimental con referencias NuGet aisladas, validación de paquetes nativos y mediciones contra el benchmark sintético descrito más abajo.
 
 Si faltan archivos del modelo, la aplicación solicitará autorización para descargarlos:
 
@@ -137,49 +121,50 @@ La salida se escribe progresivamente y se vacía después de procesar cada bloqu
 dotnet build VoiceScribe.sln
 ```
 
-Compilar variantes específicas:
-
-```powershell
-dotnet build VoiceScribe.sln -p:OnnxRuntimeFlavor=Cpu
-dotnet build VoiceScribe.sln -p:OnnxRuntimeFlavor=DirectMl
-dotnet build VoiceScribe.sln -p:OnnxRuntimeFlavor=WindowsMl
-```
-
 Ejecutar las pruebas:
 
 ```powershell
 dotnet test VoiceScribe.sln
 ```
 
-Ejecutar pruebas por variante:
-
-```powershell
-dotnet test VoiceScribe.sln -p:OnnxRuntimeFlavor=Cpu
-dotnet test VoiceScribe.sln -p:OnnxRuntimeFlavor=DirectMl
-dotnet test VoiceScribe.sln -p:OnnxRuntimeFlavor=WindowsMl
-```
-
 ## Comparación de rendimiento
 
-Para comparar DirectML clásico contra WindowsML, usa el mismo `VoiceAppConfig.json` y el mismo adaptador. La consola imprime la variante activa en `Runtime flavor` y reporta métricas periódicas del pipeline: extracción de características, encoder, decoder, joint, bucle de decodificación y tiempo total por bloque.
+Para comparar `Cpu` contra `DirectMl`, usa el mismo `VoiceAppConfig.json` y cambia solo `Inference.ExecutionProvider` o los overrides por submodelo. La consola imprime el runtime activo y reporta métricas periódicas del pipeline: extracción de características, encoder, decoder, joint, bucle de decodificación y tiempo total por bloque.
 
 El modo benchmark evita depender del micrófono. Genera audio PCM determinístico y lo procesa por el mismo `NemotronEngine`:
 
-Ejecuta primero DirectML:
+Ejecuta el benchmark con la configuración actual:
 
 ```powershell
-dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=DirectMl -- --benchmark 20
+dotnet run --project src/VoiceScribe.Console -- --benchmark 20
 ```
 
-Luego ejecuta WindowsML:
+Para comparar CPU puro, cambia temporalmente `ExecutionProvider` y los overrides de submodelo a `Cpu`:
 
-```powershell
-dotnet run --project src/VoiceScribe.Console -p:OnnxRuntimeFlavor=WindowsMl -- --benchmark 20
+```json
+"Inference": {
+  "ExecutionProvider": "Cpu",
+  "EncoderProvider": null,
+  "DecoderProvider": null,
+  "JoinerProvider": null
+}
 ```
 
-Para comparar captura real, omite `--benchmark 20` y usa el mismo micrófono y frase en ambas ejecuciones. En ambos casos confirma en los logs si `encoder.onnx`, `decoder.onnx` o `joint.onnx` caen a CPU. Si la política de fallback difiere entre variantes, compara los tiempos por sesión, no solo el tiempo total por bloque.
+Para comparar captura real, omite `--benchmark 20` y usa el mismo micrófono y frase en ambas ejecuciones. En ambos casos confirma en los logs si `encoder.onnx`, `decoder.onnx` o `joint.onnx` caen a CPU. Si la política de fallback difiere, compara los tiempos por sesión, no solo el tiempo total por bloque.
 
-En una primera medición local con 20 bloques sintéticos y configuración `encoder=Cpu, decoder=DirectMl, joiner=DirectMl`, DirectML clásico promedió `332.7 ms` por bloque y WindowsML promedió `295.0 ms` por bloque. Esta muestra favorece WindowsML, pero conviene repetir con más bloques antes de decidir.
+En una primera medición local con WindowsML, 20 bloques sintéticos y configuración `encoder=Cpu, decoder=DirectMl, joiner=DirectMl`, el promedio fue `295.0 ms` por bloque.
+
+## Runtimes Alternativos
+
+VoiceScribe no mantiene builds separados para `Microsoft.ML.OnnxRuntime`, `Microsoft.ML.OnnxRuntime.DirectML` ni `Microsoft.ML.OnnxRuntime.Gpu`. La decisión actual es usar WindowsML como runtime único para reducir combinaciones de paquetes nativos, salida de build, pruebas y soporte.
+
+Si en el futuro se necesita reintroducir otro runtime, hacerlo en una rama experimental y mantener estas reglas:
+
+- No mezclar paquetes ONNX Runtime alternativos en el mismo build.
+- Reintroducir una propiedad de build explícita solo si el paquete requiere assets nativos incompatibles con WindowsML.
+- Mantener `Cpu` y `DirectMl` como valores de `Inference.ExecutionProvider`; no usar nombres de paquetes como providers de configuración.
+- Ejecutar el benchmark sintético y una prueba con micrófono antes de promover el cambio.
+- Actualizar `constraints.md`, `readme.md` y las pruebas de `OnnxSessionFactoryResolver`.
 
 La solución contiene tres proyectos:
 
@@ -287,7 +272,7 @@ El archivo `VoiceAppConfig.json` se copia al directorio de salida al compilar.
 | `Audio.BufferMilliseconds` | Duración de cada bloque de captura. |
 | `Audio.SilenceThreshold` | Pico mínimo normalizado para procesar un bloque. |
 | `Audio.QueueCapacity` | Número máximo de fragmentos pendientes de inferencia. |
-| `Inference.ExecutionProvider` | Proveedor ONNX solicitado: `Cpu` o `DirectMl`. `Cuda` se reconoce como valor de configuración, pero no está soportado por las variantes actuales. |
+| `Inference.ExecutionProvider` | Proveedor ONNX solicitado dentro de WindowsML: `Cpu` o `DirectMl`. |
 | `Inference.EncoderProvider` | Sobrescritura opcional para `encoder.onnx`. Con `null`, usa `ExecutionProvider`. |
 | `Inference.DecoderProvider` | Sobrescritura opcional para `decoder.onnx`. Con `null`, usa `ExecutionProvider`. |
 | `Inference.JoinerProvider` | Sobrescritura opcional para `joint.onnx`. Con `null`, usa `ExecutionProvider`. |
@@ -360,9 +345,7 @@ VoiceScribe/
 
 | Paquete | Uso |
 | --- | --- |
-| `Microsoft.ML.OnnxRuntime` | Ejecución de los grafos ONNX. |
-| `Microsoft.ML.OnnxRuntime.DirectML` | Variante DirectML clásica. |
-| `Microsoft.Windows.AI.MachineLearning` | Variante experimental WindowsML para comparar el runtime ONNX/DirectML distribuido por Windows ML. |
+| `Microsoft.Windows.AI.MachineLearning` | Runtime ONNX/WindowsML único. Incluye CPU y DirectML. |
 | `NAudio` | Enumeración de dispositivos y captura de audio en Windows. |
 | `Microsoft.Extensions.Logging` | Registro de eventos y errores. |
 | `Microsoft.Extensions.Configuration` | Lectura de `appsettings.json` para configuración estándar de logging. |
@@ -383,7 +366,7 @@ Las versiones exactas se encuentran en los archivos `.csproj`.
 
 ## Limitaciones conocidas
 
-- Solo funciona en Windows porque los proyectos apuntan a `net10.0-windows` y la captura usa NAudio.
+- Solo funciona en Windows porque los proyectos apuntan a `net10.0-windows10.0.18362.0`, usan WindowsML y la captura usa NAudio.
 - Si la inferencia no mantiene el ritmo y la cola se llena, se descartan fragmentos nuevos para no bloquear el callback de captura.
 - La aplicación exige que la frecuencia y duración configuradas produzcan exactamente las muestras requeridas por el modelo; todavía no implementa resampling.
 - El contrato depende de la estructura de `genai_config.json` incluida con esta familia de exportaciones.

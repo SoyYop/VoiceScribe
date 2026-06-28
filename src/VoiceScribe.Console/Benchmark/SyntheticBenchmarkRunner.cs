@@ -14,10 +14,9 @@ internal static class SyntheticBenchmarkRunner
         int chunks,
         CancellationToken cancellationToken)
     {
-        System.Console.ForegroundColor = ConsoleColor.Cyan;
-        System.Console.WriteLine(
-            $"\n>>> Synthetic benchmark active. Processing {chunks} generated audio chunks. <<<\n");
-        System.Console.ResetColor();
+        ConsoleOutput.WriteLine(
+            $"\n>>> Synthetic benchmark active. Processing {chunks} generated audio chunks. <<<\n",
+            ConsoleColor.Cyan);
 
         double phase = 0;
         for (int i = 0; i < chunks; i++)

@@ -10,12 +10,9 @@ public sealed class DirectMlSessionSmokeTests
     [InlineData("encoder.onnx")]
     [InlineData("decoder.onnx")]
     [InlineData("joint.onnx")]
-    public void CreateSession_WhenDirectMlVariantAndModelIsAvailable(
+    public void CreateSession_WhenDirectMlProviderAndModelIsAvailable(
         string modelFileName)
     {
-        if (!OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
-            return;
-
         string? modelFolder = FindModelFolder();
         if (modelFolder is null)
             return;

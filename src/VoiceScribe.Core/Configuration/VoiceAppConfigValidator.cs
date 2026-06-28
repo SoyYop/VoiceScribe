@@ -115,11 +115,11 @@ namespace VoiceScribe.Core.Configuration
                 return;
             }
 
-            if (!OnnxRuntimeVariant.Supports(provider))
+            if (!OnnxRuntimeInfo.Supports(provider))
             {
                 errors.Add(
                     $"{propertyName} '{provider}' is not available " +
-                    $"in the {OnnxRuntimeVariant.Name} runtime variant.");
+                    $"in the {OnnxRuntimeInfo.Name} runtime.");
             }
         }
     }

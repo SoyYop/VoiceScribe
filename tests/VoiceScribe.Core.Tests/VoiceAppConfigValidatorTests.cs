@@ -68,7 +68,7 @@ public sealed class VoiceAppConfigValidatorTests
     }
 
     [Fact]
-    public void Validate_HandlesDirectMlAccordingToRuntimeVariant()
+    public void Validate_AcceptsDirectMlProvider()
     {
         VoiceAppConfig config = CreateConfig();
         config.Inference.ExecutionProvider = OnnxExecutionProvider.DirectMl;
@@ -76,14 +76,11 @@ public sealed class VoiceAppConfigValidatorTests
         IReadOnlyList<string> errors =
             VoiceAppConfigValidator.Validate(config, CreateModel());
 
-        if (OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
-            Assert.DoesNotContain(errors, error => error.Contains("runtime variant"));
-        else
-            Assert.Contains(errors, error => error.Contains("runtime variant"));
+        Assert.Empty(errors);
     }
 
     [Fact]
-    public void Validate_HandlesSubmodelDirectMlAccordingToRuntimeVariant()
+    public void Validate_AcceptsSubmodelDirectMlProvider()
     {
         VoiceAppConfig config = CreateConfig();
         config.Inference.ExecutionProvider = OnnxExecutionProvider.Cpu;
@@ -94,32 +91,7 @@ public sealed class VoiceAppConfigValidatorTests
         IReadOnlyList<string> errors =
             VoiceAppConfigValidator.Validate(config, CreateModel());
 
-        if (OnnxRuntimeVariant.Supports(OnnxExecutionProvider.DirectMl))
-        {
-            Assert.DoesNotContain(
-                errors,
-                error => error.Contains("JoinerProvider") &&
-                         error.Contains("runtime variant"));
-        }
-        else
-        {
-            Assert.Contains(
-                errors,
-                error => error.Contains("JoinerProvider") &&
-                         error.Contains("runtime variant"));
-        }
-    }
-
-    [Fact]
-    public void Validate_RejectsCuda()
-    {
-        VoiceAppConfig config = CreateConfig();
-        config.Inference.ExecutionProvider = OnnxExecutionProvider.Cuda;
-
-        IReadOnlyList<string> errors =
-            VoiceAppConfigValidator.Validate(config, CreateModel());
-
-        Assert.Contains(errors, error => error.Contains("runtime variant"));
+        Assert.Empty(errors);
     }
 
     [Fact]

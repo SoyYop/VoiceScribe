@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using VoiceScribe.Console;
 using VoiceScribe.Core.Configuration;
 
 internal sealed record DirectMlAdapter(
@@ -77,11 +78,10 @@ internal static class DirectMlAdapterSelector
 
         if (adapters.Count == 0)
         {
-            System.Console.ForegroundColor = ConsoleColor.Yellow;
-            System.Console.WriteLine(
+            ConsoleOutput.WriteLine(
                 "[Inference] No DirectML adapters were enumerated. " +
-                $"Keeping configured DeviceId={configuredDeviceId}.");
-            System.Console.ResetColor();
+                $"Keeping configured DeviceId={configuredDeviceId}.",
+                ConsoleColor.Yellow);
             return configuredDeviceId;
         }
 
@@ -91,9 +91,9 @@ internal static class DirectMlAdapterSelector
             return adapters[0].DeviceId;
         }
 
-        System.Console.ForegroundColor = ConsoleColor.Yellow;
-        System.Console.WriteLine("\n[Inference] Multiple DirectML adapters found:");
-        System.Console.ResetColor();
+        ConsoleOutput.WriteLine(
+            "\n[Inference] Multiple DirectML adapters found:",
+            ConsoleColor.Yellow);
 
         foreach (DirectMlAdapter adapter in adapters)
         {
@@ -110,10 +110,9 @@ internal static class DirectMlAdapterSelector
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            System.Console.ForegroundColor = ConsoleColor.Yellow;
-            System.Console.Write(
-                $"\nSelect DirectML device number [{configuredDeviceId}]: ");
-            System.Console.ResetColor();
+            ConsoleOutput.Write(
+                $"\nSelect DirectML device number [{configuredDeviceId}]: ",
+                ConsoleColor.Yellow);
 
             string? input = System.Console.ReadLine();
             cancellationToken.ThrowIfCancellationRequested();
@@ -140,18 +139,17 @@ internal static class DirectMlAdapterSelector
                 }
             }
 
-            System.Console.ForegroundColor = ConsoleColor.Red;
-            System.Console.WriteLine("[Inference] Invalid DirectML device number. Try again.");
-            System.Console.ResetColor();
+            ConsoleOutput.WriteLine(
+                "[Inference] Invalid DirectML device number. Try again.",
+                ConsoleColor.Red);
         }
     }
 
     private static void WriteSelectedAdapter(DirectMlAdapter adapter)
     {
-        System.Console.ForegroundColor = ConsoleColor.Green;
-        System.Console.WriteLine(
-            $"[Inference] DirectML device selected: {adapter.DeviceId} - {adapter.Description}");
-        System.Console.ResetColor();
+        ConsoleOutput.WriteLine(
+            $"[Inference] DirectML device selected: {adapter.DeviceId} - {adapter.Description}",
+            ConsoleColor.Green);
     }
 
     private static ulong ToMiB(UIntPtr bytes) =>

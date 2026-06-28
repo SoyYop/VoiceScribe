@@ -1,10 +1,12 @@
 <Project>
   <PropertyGroup>
-    <OnnxRuntimeFlavor Condition="'$(OnnxRuntimeFlavor)' == ''">Cpu</OnnxRuntimeFlavor>
-    <VoiceScribeTargetFramework Condition="'$(VoiceScribeTargetFramework)' == ''">net10.0-windows</VoiceScribeTargetFramework>
-    <VoiceScribeTargetFramework Condition="'$(OnnxRuntimeFlavor)' == 'WindowsMl'">net10.0-windows10.0.18362.0</VoiceScribeTargetFramework>
-    <BaseIntermediateOutputPath>obj\$(OnnxRuntimeFlavor)\</BaseIntermediateOutputPath>
-    <BaseOutputPath>bin\$(OnnxRuntimeFlavor)\</BaseOutputPath>
+    <VoiceScribeTargetFramework Condition="'$(VoiceScribeTargetFramework)' == ''">net10.0-windows10.0.18362.0</VoiceScribeTargetFramework>
     <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**</DefaultItemExcludes>
   </PropertyGroup>
+
+  <Target Name="RejectRemovedOnnxRuntimeFlavor" BeforeTargets="PrepareForBuild">
+    <Error
+      Condition="'$(OnnxRuntimeFlavor)' != ''"
+      Text="OnnxRuntimeFlavor has been removed. VoiceScribe now builds with WindowsML only; select Cpu or DirectMl with Inference.ExecutionProvider in VoiceAppConfig.json." />
+  </Target>
 </Project>
