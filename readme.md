@@ -4,6 +4,19 @@ VoiceScribe is a Windows console prototype for local, near real-time speech tran
 
 The application does not send audio to an external service. Internet access is only needed the first time model files are downloaded.
 
+## Model Background
+
+VoiceScribe targets the ONNX export of NVIDIA Nemotron 3.5 ASR Streaming 0.6B. The upstream NVIDIA model is a multilingual streaming ASR model with roughly 600M parameters, native punctuation and capitalization, support for 40 language-locales, and a Cache-Aware FastConformer-RNNT architecture.
+
+Primary references:
+
+- [NVIDIA Nemotron 3.5 ASR Streaming 0.6B on Hugging Face](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b)
+- [NVIDIA Nemotron developer page](https://developer.nvidia.com/topics/ai/nemotron)
+- [NVIDIA NIM / Build page for Nemotron ASR Streaming](https://build.nvidia.com/nvidia/nemotron-asr-streaming)
+- [NVIDIA Hugging Face blog: fine-tuning Nemotron 3.5 ASR](https://huggingface.co/blog/nvidia/fine-tuning-nemotron-35-asr)
+- [Previous English-only base model: Nemotron Speech Streaming EN 0.6B](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b)
+- [ONNX community export used by the default config](https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4)
+
 ## Current Capabilities
 
 - Captures PCM microphone audio on Windows with NAudio.
