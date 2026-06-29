@@ -46,6 +46,8 @@ namespace VoiceScribe.Core.Engine
         private double _metricsJointMs;
         private double _metricsDecodeLoopMs;
         private double _metricsTotalChunkMs;
+        private int _trailingSilenceChunksProcessed;
+        private bool _hasProcessedSpeechChunk;
 
         // Sesiones de ONNX Runtime para cada modelo
         private InferenceSession _encoderSession = null!;
@@ -236,7 +238,12 @@ namespace VoiceScribe.Core.Engine
                     while (bufferedBytes - offset >= expectedBytes)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        ProcessPcmChunk(pending, offset, bytesPerFrame, pcmChunk);
+                        ProcessPcmChunk(
+                            pending,
+                            offset,
+                            bytesPerFrame,
+                            pcmChunk,
+                            forceProcessSilence: false);
                         offset += expectedBytes;
                     }
 
@@ -251,6 +258,14 @@ namespace VoiceScribe.Core.Engine
                             bufferedBytes);
                     }
                 }
+
+                FlushEndOfStream(
+                    pending,
+                    bufferedBytes,
+                    expectedBytes,
+                    bytesPerFrame,
+                    pcmChunk,
+                    cancellationToken);
             }
             catch (OperationCanceledException)
                 when (cancellationToken.IsCancellationRequested)
@@ -263,7 +278,8 @@ namespace VoiceScribe.Core.Engine
             byte[] buffer,
             int bufferOffset,
             int bytesPerFrame,
-            float[] pcmChunk)
+            float[] pcmChunk,
+            bool forceProcessSilence)
         {
             try
             {
@@ -280,7 +296,8 @@ namespace VoiceScribe.Core.Engine
                     maxAmp = Math.Max(maxAmp, Math.Abs(sample));
                 }
 
-                if (maxAmp < _audioOptions.SilenceThreshold)
+                bool isSilent = maxAmp < _audioOptions.SilenceThreshold;
+                if (!ShouldProcessChunk(isSilent, forceProcessSilence))
                     return;
 
                 // IMPORTANTE:
@@ -346,6 +363,78 @@ namespace VoiceScribe.Core.Engine
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing queued audio chunk.");
+            }
+        }
+
+        private bool ShouldProcessChunk(
+            bool isSilent,
+            bool forceProcessSilence)
+        {
+            if (forceProcessSilence)
+                return true;
+
+            if (!isSilent)
+            {
+                _hasProcessedSpeechChunk = true;
+                _trailingSilenceChunksProcessed = 0;
+                return true;
+            }
+
+            if (!_hasProcessedSpeechChunk ||
+                _trailingSilenceChunksProcessed >= _audioOptions.TrailingSilenceChunks)
+            {
+                return false;
+            }
+
+            _trailingSilenceChunksProcessed++;
+            _logger.LogDebug(
+                "Processing trailing silence chunk {Chunk}/{Total}.",
+                _trailingSilenceChunksProcessed,
+                _audioOptions.TrailingSilenceChunks);
+            return true;
+        }
+
+        private void FlushEndOfStream(
+            byte[] pending,
+            int bufferedBytes,
+            int expectedBytes,
+            int bytesPerFrame,
+            float[] pcmChunk,
+            CancellationToken cancellationToken)
+        {
+            if (bufferedBytes > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Array.Clear(pending, bufferedBytes, expectedBytes - bufferedBytes);
+                _logger.LogInformation(
+                    "Flushing final partial audio chunk: {BufferedBytes}/{ExpectedBytes} bytes.",
+                    bufferedBytes,
+                    expectedBytes);
+                ProcessPcmChunk(
+                    pending,
+                    0,
+                    bytesPerFrame,
+                    pcmChunk,
+                    forceProcessSilence: true);
+            }
+
+            if (_audioOptions.FinalSilencePaddingChunks == 0)
+                return;
+
+            byte[] silence = new byte[expectedBytes];
+            for (int i = 0; i < _audioOptions.FinalSilencePaddingChunks; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _logger.LogDebug(
+                    "Flushing final silence padding chunk {Chunk}/{Total}.",
+                    i + 1,
+                    _audioOptions.FinalSilencePaddingChunks);
+                ProcessPcmChunk(
+                    silence,
+                    0,
+                    bytesPerFrame,
+                    pcmChunk,
+                    forceProcessSilence: true);
             }
         }
 

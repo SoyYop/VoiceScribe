@@ -1,49 +1,43 @@
 # VoiceScribe
 
-VoiceScribe es un prototipo de transcripción de voz en tiempo real para Windows, escrito en C# y basado en el modelo **NVIDIA Nemotron 3.5 ASR Streaming 0.6B** exportado a ONNX.
+VoiceScribe is a Windows console prototype for local, near real-time speech transcription. It captures microphone audio, converts it to log-mel features, and runs the **NVIDIA Nemotron 3.5 ASR Streaming 0.6B** ONNX export through a local RNN-T pipeline.
 
-La aplicación captura audio desde un micrófono, genera características log-mel localmente y ejecuta un pipeline RNN-T compuesto por encoder, decoder y joint. La inferencia se realiza en la máquina local mediante ONNX Runtime; la conexión a Internet solo es necesaria para descargar los archivos del modelo si todavía no existen.
+The application does not send audio to an external service. Internet access is only needed the first time model files are downloaded.
 
-Las invariantes que deben preservarse al modificar audio, tensores ONNX, concurrencia o decodificación están documentadas en [constraints.md](constraints.md). Debe revisarse antes de realizar cambios en esas áreas.
+## Current Capabilities
 
-## Estado actual
+- Captures PCM microphone audio on Windows with NAudio.
+- Uses 16 kHz, mono, 16-bit audio by default.
+- Processes 560 ms chunks, matching the model requirement of 8,960 samples.
+- Builds log-mel features locally with a streaming audio preprocessor.
+- Runs encoder, decoder, and joint ONNX graphs through WindowsML.
+- Supports `Cpu` and `DirectMl` execution providers inside WindowsML.
+- Falls back per ONNX session to CPU when DirectML cannot initialize and fallback is enabled.
+- Streams transcription to the console and optionally appends it to a file.
+- Includes a synthetic benchmark mode that does not require a microphone.
+- Includes tests for model contract parsing, configuration validation, state shapes, and audio feature extraction.
 
-- Compila correctamente con .NET 10.
-- Captura audio PCM mono a 16 kHz y 16 bits.
-- Procesa bloques de 560 ms, equivalentes a 8960 muestras.
-- Mantiene cachés acústicas y de características entre bloques.
-- Decodifica tokens de forma greedy mediante el pipeline RNN-T.
-- Escribe la transcripción en consola y, opcionalmente, en un archivo.
-- Descarga automáticamente los archivos faltantes desde Hugging Face, previa confirmación.
-- Incluye pruebas automatizadas para contrato del modelo, configuración, formas de estado ONNX y extracción de características.
-
-## Requisitos
+## Requirements
 
 - Windows.
 - [.NET 10 SDK](https://dotnet.microsoft.com/download).
-- Un micrófono reconocido por Windows.
-- Conexión a Internet durante la primera descarga del modelo.
-- Espacio en disco suficiente para los archivos ONNX y sus datos externos.
+- A Windows-recognized microphone.
+- Internet access for the first model download.
+- Disk space for the ONNX model files and external data.
 
-La implementación actual usa WindowsML como único runtime ONNX. Dentro de ese runtime se puede seleccionar `Cpu` o `DirectMl` como proveedor de ejecución mediante `VoiceAppConfig.json`. WindowsML incluye el proveedor CPU, por lo que el fallback no requiere un paquete CPU separado.
-
-## Inicio rápido
-
-Clonar el repositorio y restaurar las dependencias:
+## Quick Start
 
 ```powershell
-git clone <URL_DEL_REPOSITORIO>
+git clone <REPOSITORY_URL>
 cd VoiceScribe
 dotnet restore
 ```
 
-Revisar `src/VoiceScribe.Console/VoiceAppConfig.json` y cambiar `ModelDownloadsPath`. El valor incluido en el repositorio es una ruta absoluta de la máquina de desarrollo y no será válido en otras instalaciones.
-
-Ejemplo:
+Edit `src/VoiceScribe.Console/VoiceAppConfig.json` before the first run. The checked-in `ModelDownloadsPath` is a development-machine path and should be changed.
 
 ```json
 {
-  "ModelDownloadsPath": "C:/Modelos/nemotron-3.5-asr",
+  "ModelDownloadsPath": "C:/Models/nemotron-3.5-asr",
   "RepoUrl": "https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4/resolve/main",
   "Audio": {
     "SampleRate": 16000,
@@ -51,7 +45,9 @@ Ejemplo:
     "Channels": 1,
     "BufferMilliseconds": 560,
     "SilenceThreshold": 0.003,
-    "QueueCapacity": 8
+    "QueueCapacity": 8,
+    "TrailingSilenceChunks": 0,
+    "FinalSilencePaddingChunks": 4
   },
   "Inference": {
     "ExecutionProvider": "DirectMl",
@@ -62,8 +58,8 @@ Ejemplo:
     "GpuMemoryLimitMiB": null,
     "AllowCpuFallback": true,
     "EnableProfiling": false,
-    "LogSeverityLevel": "Verbose",
-    "LogVerbosityLevel": 5
+    "LogSeverityLevel": "Error",
+    "LogVerbosityLevel": 2
   },
   "Nemotron": {
     "LanguageId": 101,
@@ -73,333 +69,285 @@ Ejemplo:
 }
 ```
 
-`ModelFiles` es opcional. Si se omite, se utiliza la lista estándar centralizada en `NemotronModelFiles`. Puede declararse explícitamente para trabajar con una distribución de archivos diferente.
-
-Ejecutar la aplicación:
+Run the app:
 
 ```powershell
 dotnet run --project src/VoiceScribe.Console
 ```
 
-Para usar aceleración por GPU se debe establecer `"ExecutionProvider": "DirectMl"` en `VoiceAppConfig.json`. Para forzar CPU, usar `"ExecutionProvider": "Cpu"`. El runtime subyacente en ambos casos es `Microsoft.Windows.AI.MachineLearning` 2.1.71 y el proyecto compila con `net10.0-windows10.0.18362.0`, mínimo requerido por ese paquete.
+If model files are missing, VoiceScribe asks for confirmation before downloading them. Once the model is loaded, select a microphone if more than one is available, speak clearly, and press `Enter` to stop.
 
-Con la exportación INT4 actual, decoder y joint crean sesiones DirectML, pero el encoder falla al inicializar el proveedor. Con `AllowCpuFallback: true`, el encoder se recrea explícitamente en CPU y se registra una advertencia. Por ello, esta modalidad es actualmente híbrida.
-
-Si hay más de un adaptador compatible con DirectML, la consola muestra una selección antes de cargar los modelos. El número elegido se guarda en memoria como `Inference.DeviceId` para esa ejecución.
-
-CUDA y el paquete DirectML clásico no se incluyen como variantes soportadas. Si se necesita reintroducir un runtime alternativo, debe hacerse como rama experimental con referencias NuGet aisladas, validación de paquetes nativos y mediciones contra el benchmark sintético descrito más abajo.
-
-Si faltan archivos del modelo, la aplicación solicitará autorización para descargarlos:
-
-```text
-[Missing Assets] Nemotron model layers missing. Download? (y/n):
-```
-
-Una vez cargado el modelo:
-
-1. Selecciona el micrófono si se detecta más de uno.
-2. Habla con claridad.
-3. Presiona `Enter` para detener la captura.
-
-Las sesiones ONNX se cargan en segundo plano mientras se muestra y procesa la selección del micrófono. La captura comienza únicamente cuando ambas operaciones han finalizado.
-
-## Guardar la transcripción
-
-El primer argumento de la aplicación se interpreta como el archivo de salida. El contenido se agrega al final si el archivo ya existe.
+To append transcription output to a file:
 
 ```powershell
-dotnet run --project src/VoiceScribe.Console -- transcripcion.txt
+dotnet run --project src/VoiceScribe.Console -- transcript.txt
 ```
 
-La salida se escribe progresivamente y se vacía después de procesar cada bloque de audio.
-
-`Ctrl+C` solicita cancelación durante la descarga de modelos, la espera de entrada y el procesamiento de la cola. El apagado mediante `Enter` conserva el drenaje normal de los bloques pendientes.
-
-## Compilación
+## Build and Test
 
 ```powershell
 dotnet build VoiceScribe.sln
-```
-
-Ejecutar las pruebas:
-
-```powershell
 dotnet test VoiceScribe.sln
 ```
 
-## Comparación de rendimiento
-
-Para comparar `Cpu` contra `DirectMl`, usa el mismo `VoiceAppConfig.json` y cambia solo `Inference.ExecutionProvider` o los overrides por submodelo. La consola imprime el runtime activo y reporta métricas periódicas del pipeline: extracción de características, encoder, decoder, joint, bucle de decodificación y tiempo total por bloque.
-
-El modo benchmark evita depender del micrófono. Genera audio PCM determinístico y lo procesa por el mismo `NemotronEngine`:
-
-Ejecuta el benchmark con la configuración actual:
+Run the synthetic benchmark:
 
 ```powershell
 dotnet run --project src/VoiceScribe.Console -- --benchmark 20
 ```
 
-Para comparar CPU puro, cambia temporalmente `ExecutionProvider` y los overrides de submodelo a `Cpu`:
+The benchmark generates deterministic PCM chunks and sends them through the same `NemotronEngine` used by live capture.
 
-```json
-"Inference": {
-  "ExecutionProvider": "Cpu",
-  "EncoderProvider": null,
-  "DecoderProvider": null,
-  "JoinerProvider": null
-}
+## Architecture
+
+### Nemotron Streaming Pipeline
+
+```mermaid
+flowchart LR
+    mic[Microphone PCM] --> capture[NAudio WaveInEvent]
+    capture --> queue[Bounded byte queue]
+    queue --> accum[PCM accumulator]
+    accum --> chunk[8960-sample chunk]
+    chunk --> features[AudioFeatureExtractor<br/>log-mel features]
+
+    subgraph model[Nemotron 3.5 ASR Streaming ONNX]
+        features --> encoder[encoder.onnx<br/>FastConformer acoustic encoder]
+        encoder <--> ecache[Encoder streaming caches<br/>cache_last_channel<br/>cache_last_time<br/>cache_last_channel_len]
+        encoder --> acoustic[Acoustic frames]
+
+        acoustic --> joint[joint.onnx]
+        decoder[decoder.onnx<br/>RNN-T prediction network] --> joint
+        decoder <--> dstate[Decoder LSTM state<br/>h_in / c_in]
+        joint --> logits[Token logits]
+    end
+
+    logits --> greedy[Greedy RNN-T decode]
+    greedy --> tokenizer[tokenizer.json]
+    tokenizer --> out[Console / transcript file]
 ```
 
-Para comparar captura real, omite `--benchmark 20` y usa el mismo micrófono y frase en ambas ejecuciones. En ambos casos confirma en los logs si `encoder.onnx`, `decoder.onnx` o `joint.onnx` caen a CPU. Si la política de fallback difiere, compara los tiempos por sesión, no solo el tiempo total por bloque.
+The model is split into three ONNX graphs. The encoder consumes log-mel audio features and updates acoustic streaming caches. The decoder keeps linguistic recurrent state. The joint graph combines one encoder frame with the current decoder output, and greedy decoding emits tokens until the blank token stops the current acoustic frame.
 
-En una primera medición local con WindowsML, 20 bloques sintéticos y configuración `encoder=Cpu, decoder=DirectMl, joiner=DirectMl`, el promedio fue `295.0 ms` por bloque.
+Small model-file view:
 
-## Runtimes Alternativos
+```mermaid
+flowchart LR
+    cfg[genai_config.json<br/>model contract] --> engine[NemotronEngine]
+    tok[tokenizer.json<br/>token id to text] --> emit[Raw transcript]
+    audioCfg[audio_processor_config.json<br/>feature parameters] --> pre[AudioFeatureExtractor]
 
-VoiceScribe no mantiene builds separados para `Microsoft.ML.OnnxRuntime`, `Microsoft.ML.OnnxRuntime.DirectML` ni `Microsoft.ML.OnnxRuntime.Gpu`. La decisión actual es usar WindowsML como runtime único para reducir combinaciones de paquetes nativos, salida de build, pruebas y soporte.
+    pre --> enc[encoder.onnx<br/>audio features to acoustic frames]
+    enc --> joint[joint.onnx<br/>combine acoustic + decoder state]
+    dec[decoder.onnx<br/>previous token + LSTM state] --> joint
+    joint --> id[Next token id or blank]
+    id --> dec
+    id --> tok
+```
 
-Si en el futuro se necesita reintroducir otro runtime, hacerlo en una rama experimental y mantener estas reglas:
+### Program Structure
 
-- No mezclar paquetes ONNX Runtime alternativos en el mismo build.
-- Reintroducir una propiedad de build explícita solo si el paquete requiere assets nativos incompatibles con WindowsML.
-- Mantener `Cpu` y `DirectMl` como valores de `Inference.ExecutionProvider`; no usar nombres de paquetes como providers de configuración.
-- Ejecutar el benchmark sintético y una prueba con micrófono antes de promover el cambio.
-- Actualizar `constraints.md`, `readme.md` y las pruebas de `OnnxSessionFactoryResolver`.
+```mermaid
+flowchart TB
+    subgraph console[VoiceScribe.Console]
+        program[Program.cs]
+        cli[CommandLine<br/>RunOptionsParser]
+        audioIn[Audio<br/>ConsoleAudioInput]
+        bench[Benchmark<br/>SyntheticBenchmarkRunner]
+        bootstrap[ModelAssetBootstrapper]
+        adapters[DirectMlAdapterSelector]
+        printer[InferenceConfigurationPrinter]
+        output[ConsoleOutput]
+    end
 
-La solución contiene tres proyectos:
+    subgraph core[VoiceScribe.Core]
+        config[Configuration<br/>VoiceAppConfig<br/>AudioCaptureOptions<br/>OnnxRuntimeOptions]
+        assets[ModelAssets<br/>NemotronModelDefinition<br/>NemotronModelFiles<br/>ModelDownloader]
+        factories[Engine factories<br/>OnnxSessionFactoryResolver<br/>Cpu / DirectML factories]
+        engine[NemotronEngine]
+        extractor[Audio<br/>AudioFeatureExtractor]
+    end
 
-| Proyecto | Responsabilidad |
+    subgraph tests[VoiceScribe.Core.Tests]
+        testSuite[Contract, config, state shape,<br/>feature extractor, parser tests]
+    end
+
+    program --> cli
+    program --> config
+    program --> bootstrap
+    bootstrap --> assets
+    program --> assets
+    program --> adapters
+    program --> factories
+    factories --> engine
+    program --> audioIn
+    program --> bench
+    audioIn --> engine
+    bench --> engine
+    engine --> extractor
+    engine --> assets
+    engine --> output
+    testSuite --> core
+```
+
+Main runtime flow:
+
+```mermaid
+sequenceDiagram
+    participant Program
+    participant Assets as Model assets
+    participant Engine as NemotronEngine
+    participant Audio as WaveInEvent
+    participant Worker as Audio worker
+    participant ONNX as ONNX sessions
+    participant Output as Console/File
+
+    Program->>Assets: Ensure model files exist
+    Program->>Assets: Load genai_config.json
+    Program->>Engine: Create engine and ONNX sessions
+    Program->>Audio: Select and start microphone
+    Audio-->>Engine: DataAvailable bytes
+    Engine-->>Worker: Enqueue bytes
+    Worker->>Worker: Accumulate full chunks
+    Worker->>ONNX: Extract features and run encoder / decoder / joint
+    ONNX-->>Worker: Token ids
+    Worker->>Output: Emit raw model tokens
+    Program->>Audio: StopRecording on Enter
+    Program->>Engine: StopAsync
+    Engine-->>Worker: Complete queue
+    Worker->>ONNX: Flush partial chunk and final silence padding
+    Worker->>Output: Emit any remaining raw model tokens
+```
+
+Projects:
+
+| Project | Responsibility |
 | --- | --- |
-| `VoiceScribe.Console` | Inicio de la aplicación, logging, selección de micrófono, captura de audio, configuración y descarga del modelo. |
-| `VoiceScribe.Core` | Extracción de características, administración de modelos ONNX, cachés de streaming y decodificación RNN-T. |
-| `VoiceScribe.Core.Tests` | Pruebas del contrato Nemotron, validación, estados dinámicos y extractor acústico. |
+| `VoiceScribe.Console` | Application startup, command-line options, logging, microphone selection, capture, benchmark mode, and model download flow. |
+| `VoiceScribe.Core` | Configuration, model contract loading, audio feature extraction, ONNX session management, streaming state, RNN-T decode, and tokenization. |
+| `VoiceScribe.Core.Tests` | Unit tests for model contracts, configuration validation, tensor state behavior, and feature extraction. |
 
-## Arquitectura
+## Key Design Decisions
+
+### Model Contract
+
+Model-specific values are loaded from `genai_config.json` and ONNX metadata instead of being duplicated in the engine. This includes graph file names, input and output names, sample rate, chunk size, hidden sizes, `blank_id`, and `max_symbols_per_step`.
+
+`VoiceAppConfig.json` is used for operational settings and explicit overrides only.
+
+### Audio Preprocessor
+
+The model expects log-mel features, not raw PCM. VoiceScribe implements the preprocessor locally in `AudioFeatureExtractor` so the live microphone path can feed the ONNX encoder directly.
+
+The extractor reads `audio_processor_config.json`, with `genai_config.json` used as fallback for model-level values. The standard export uses:
+
+- 16,000 Hz sample rate.
+- 8,960 samples per chunk.
+- 560 ms chunks.
+- 512-point FFT.
+- 400-sample Hann window.
+- 160-sample hop length.
+- 128 mel bins.
+- Slaney-style mel filter normalization.
+- Optional dithering and preemphasis.
+- Nine cached pre-encoder feature frames.
+
+Each standard chunk produces 56 current frames plus nine cached frames, resulting in an encoder input tensor shaped `[1, 65, 128]`.
+
+### Streaming and Concurrency
+
+`WaveInEvent.DataAvailable` only copies received bytes into a bounded queue. It does not run feature extraction or ONNX inference.
+
+A single worker drains the queue, preserves audio order, accumulates partial PCM fragments until a full model chunk is available, and runs the streaming pipeline. If the queue is full, the newest fragment is dropped and a warning is logged. This protects the capture callback from blocking.
+
+On normal shutdown, the worker pads and processes the final partial chunk, then sends a configurable amount of final silence padding. This gives the streaming RNN-T state trailing context so the last spoken words are less likely to remain pending when the session ends.
+
+### ONNX Runtime
+
+VoiceScribe uses `Microsoft.Windows.AI.MachineLearning` as the only ONNX runtime package. `Inference.ExecutionProvider` selects providers available inside WindowsML:
+
+- `Cpu`
+- `DirectMl`
+
+The CPU provider is included in WindowsML. CPU fallback does not require adding `Microsoft.ML.OnnxRuntime`.
+
+With the current INT4 export, `decoder.onnx` and `joint.onnx` can initialize with DirectML, while `encoder.onnx` may fail DirectML initialization and fall back to CPU when `AllowCpuFallback` is `true`. The effective mode can therefore be hybrid:
 
 ```text
-Micrófono
-   |
-   | PCM 16 kHz / 16 bits / mono
-   v
-NAudio WaveInEvent
-   |
-   | copia rápida de bytes
-   v
-Cola acotada + acumulador PCM
-   |
-   | bloques completos de 560 ms
-   v
-AudioFeatureExtractor
-   |
-   | log-mel [1, 65, 128]
-   v
-Encoder ONNX + cachés acústicas
-   |
-   | representaciones [1, T, D]
-   v
-Decoder ONNX + estados LSTM
-   |
-   v
-Joint ONNX -> ArgMax
-   |
-   v
-Tokenizer -> consola / archivo
+encoder = Cpu
+decoder = DirectMl
+joint   = DirectMl
 ```
 
-### Captura y preprocesamiento
+The INT4 external data files are roughly:
 
-`Program.cs` configura `WaveInEvent` con:
+| Graph | External data size |
+| --- | ---: |
+| Encoder | 658 MiB |
+| Decoder | 57 MiB |
+| Joint | 36 MiB |
 
-- 16 000 muestras por segundo.
-- 16 bits por muestra.
-- Un canal.
-- Búferes de 560 ms.
+These numbers are not final VRAM usage. ONNX Runtime may allocate transformed weights, activations, workspaces, and per-session memory arenas. `Inference.GpuMemoryLimitMiB` is validated by configuration, but this code does not currently enforce it for DirectML.
 
-La enumeración, selección y creación del dispositivo de entrada están aisladas en `ConsoleAudioInput`, fuera del flujo principal de `Program`.
+### Decoder State
 
-El callback `DataAvailable` no ejecuta inferencia. Copia los bytes recibidos a una cola acotada y retorna. Un único worker acumula los fragmentos hasta completar exactamente las muestras requeridas por el modelo y luego ejecuta el pipeline ONNX. Si la cola alcanza su capacidad, el bloque nuevo se descarta y se registra una advertencia.
+The RNN-T decoder advances its recurrent state only after a non-blank token. Encoder caches and decoder LSTM states are retained across chunks and updated in place to avoid unnecessary allocations.
 
-`AudioFeatureExtractor` aplica:
+Dynamic ONNX dimensions are resolved based on tensor meaning, not globally converted to `1`. See [constraints.md](constraints.md) before changing audio, tensor shapes, ONNX sessions, streaming state, or shutdown behavior.
 
-- Normalización de la longitud del bloque.
-- Preénfasis y dithering opcional.
-- Ventana Hann.
-- FFT de 512 puntos implementada en el proyecto.
-- Banco de 128 filtros mel con normalización de estilo Slaney.
-- Conversión a energía log-mel.
-- Caché de nueve frames previos.
+## Configuration
 
-Con la configuración estándar, cada bloque produce 56 frames actuales más nueve frames almacenados: un tensor de entrada de forma `[1, 65, 128]`.
+`VoiceAppConfig.json` is copied to the output directory at build time.
 
-### Inferencia ONNX
-
-Antes de crear las sesiones, la aplicación carga `genai_config.json` como contrato del modelo. De allí obtiene tamaños, parámetros RNN-T, nombres de archivos y nombres de nodos ONNX.
-
-`NemotronEngine` crea tres sesiones de ONNX Runtime:
-
-- `encoder.onnx`: procesa las características acústicas y actualiza las cachés de streaming.
-- `decoder.onnx`: mantiene el estado lingüístico recurrente.
-- `joint.onnx`: combina las salidas del encoder y decoder para obtener los logits de tokens.
-
-La decodificación es greedy. Si `Nemotron.MaxSymbolsPerStep` o `Nemotron.BlankId` son `null`, se utilizan `max_symbols_per_step` y `blank_id` declarados por el modelo.
-
-Las dimensiones de cachés y estados recurrentes se obtienen desde `InputMetadata` y se validan contra `genai_config.json`. Solo los ejes dinámicos de los tensores de estado inicial se resuelven con tamaño uno.
-
-Los buffers de caché del encoder y los estados LSTM del decoder se conservan durante toda la sesión. Cada inferencia copia los valores nuevos sobre esos buffers sin recrear sus tensores.
-
-### Tokenización
-
-El vocabulario se lee desde `tokenizer.json`, bajo `model.vocab`. El cargador admite elementos representados como strings, arreglos u objetos con una propiedad `piece`.
-
-Antes de emitir cada token:
-
-- Se descartan tokens especiales que comienzan con `<` o `[`.
-- `▁` se convierte en un espacio.
-- Se elimina el prefijo `##`.
-
-## Configuración
-
-El archivo `VoiceAppConfig.json` se copia al directorio de salida al compilar.
-
-| Propiedad | Descripción |
+| Property | Description |
 | --- | --- |
-| `ModelDownloadsPath` | Directorio local que contiene o recibirá los archivos del modelo. |
-| `RepoUrl` | URL base utilizada para descargar cada archivo. |
-| `ModelFiles` | Lista de archivos obligatorios. Si se omite, se usa la lista estándar de Nemotron. |
-| `Audio.SampleRate` | Frecuencia de captura; valor predeterminado: 16 000 Hz. |
-| `Audio.BitsPerSample` | Profundidad PCM: 8, 16, 24 o 32 bits. |
-| `Audio.Channels` | Número de canales capturados. El extractor procesa el primer canal. |
-| `Audio.BufferMilliseconds` | Duración de cada bloque de captura. |
-| `Audio.SilenceThreshold` | Pico mínimo normalizado para procesar un bloque. |
-| `Audio.QueueCapacity` | Número máximo de fragmentos pendientes de inferencia. |
-| `Inference.ExecutionProvider` | Proveedor ONNX solicitado dentro de WindowsML: `Cpu` o `DirectMl`. |
-| `Inference.EncoderProvider` | Sobrescritura opcional para `encoder.onnx`. Con `null`, usa `ExecutionProvider`. |
-| `Inference.DecoderProvider` | Sobrescritura opcional para `decoder.onnx`. Con `null`, usa `ExecutionProvider`. |
-| `Inference.JoinerProvider` | Sobrescritura opcional para `joint.onnx`. Con `null`, usa `ExecutionProvider`. |
-| `Inference.DeviceId` | Identificador del dispositivo para proveedores GPU. |
-| `Inference.GpuMemoryLimitMiB` | Límite opcional de VRAM. Se valida, pero actualmente no se aplica en DirectML. |
-| `Inference.AllowCpuFallback` | Permite recrear en CPU una sesión GPU que no pueda inicializarse. |
-| `Inference.EnableProfiling` | Activa el perfil de ONNX Runtime. |
-| `Inference.LogSeverityLevel` | Nivel opcional de logs de ONNX Runtime: `Verbose`, `Info`, `Warning`, `Error` o `Fatal`. Con `null`, usa el valor predeterminado de ONNX Runtime. |
-| `Inference.LogVerbosityLevel` | Verbosidad opcional de ONNX Runtime. Es útil principalmente con `LogSeverityLevel: "Verbose"`. |
-| `Nemotron.LanguageId` | Identificador de idioma enviado al encoder; valor predeterminado: `101`. |
-| `Nemotron.MaxSymbolsPerStep` | Sobrescritura opcional del máximo de tokens por frame. Con `null`, se usa el contrato del modelo. |
-| `Nemotron.BlankId` | Sobrescritura opcional del token blank. Con `null`, se usa el contrato del modelo. |
+| `ModelDownloadsPath` | Local directory containing or receiving model files. |
+| `RepoUrl` | Base URL used to download missing model files. |
+| `ModelFiles` | Optional explicit model file list. If omitted, the built-in Nemotron file list is used. |
+| `Audio.SampleRate` | Capture sample rate. Must match the model. |
+| `Audio.BitsPerSample` | Integer PCM bit depth: `8`, `16`, `24`, or `32`. |
+| `Audio.Channels` | Captured channel count. The engine reads the first channel. |
+| `Audio.BufferMilliseconds` | Capture buffer duration. Must produce the model chunk size. |
+| `Audio.SilenceThreshold` | Minimum normalized peak amplitude required for processing. |
+| `Audio.QueueCapacity` | Maximum pending capture fragments. |
+| `Audio.TrailingSilenceChunks` | Optional silent chunks allowed after speech before silence filtering resumes. The default `0` keeps live silence filtering unchanged. |
+| `Audio.FinalSilencePaddingChunks` | Silent chunks forced during normal shutdown to flush trailing streaming context. |
+| `Inference.ExecutionProvider` | Default provider: `Cpu` or `DirectMl`. |
+| `Inference.EncoderProvider` | Optional provider override for `encoder.onnx`. |
+| `Inference.DecoderProvider` | Optional provider override for `decoder.onnx`. |
+| `Inference.JoinerProvider` | Optional provider override for `joint.onnx`. |
+| `Inference.DeviceId` | GPU device id used by DirectML. |
+| `Inference.GpuMemoryLimitMiB` | Optional validated setting; not currently enforced by DirectML code. |
+| `Inference.AllowCpuFallback` | Recreate a failed GPU session on CPU. |
+| `Inference.EnableProfiling` | Enable ONNX Runtime profiling. |
+| `Inference.LogSeverityLevel` | Native ONNX Runtime log severity. |
+| `Inference.LogVerbosityLevel` | Native ONNX Runtime verbosity. |
+| `Nemotron.LanguageId` | Language id sent to the encoder. |
+| `Nemotron.MaxSymbolsPerStep` | Optional override; otherwise read from the model contract. |
+| `Nemotron.BlankId` | Optional override; otherwise read from the model contract. |
 
-Si el archivo no existe o no puede deserializarse, se usa la configuración predeterminada definida en `Program.cs`. Antes de iniciar la captura se valida que la frecuencia y las muestras por bloque coincidan con el contrato del modelo. Una configuración incompatible detiene el arranque.
+Managed application logging is configured in `src/VoiceScribe.Console/appsettings.json`.
 
-## Logging
+## Known Limitations
 
-El nivel de logging de la aplicación se configura con el archivo estándar `appsettings.json`, que también se copia al directorio de salida. La sección usada por `Microsoft.Extensions.Logging` es `Logging`.
+- Windows only: the projects target `net10.0-windows10.0.18362.0`, use WindowsML, and capture through NAudio.
+- No resampling. The configured capture sample rate and chunk duration must match the model contract.
+- Only the first channel is processed for multichannel input.
+- Silence filtering skips chunks whose peak amplitude is below `Audio.SilenceThreshold`.
+- Final silence flushes streaming context on shutdown, but excessive padding can increase exit latency or emit unwanted tokens.
+- Greedy RNN-T decoding only. There is no beam search, timestamping, speaker diarization, confidence scoring, or sentence segmentation.
+- Partial downloads are not content-validated. Remove an incomplete model file before retrying.
+- There is no automated end-to-end test that runs all three ONNX graphs with real model files.
 
-Ejemplo:
+## Troubleshooting
 
-```json
-{
-  "Logging": {
-    "LogLevel": {
-      "Default": "Trace",
-      "Microsoft": "Warning",
-      "System": "Warning"
-    },
-    "Console": {
-      "LogLevel": {
-        "Default": "Trace"
-      }
-    }
-  }
-}
-```
-
-Esto controla el logging administrado de la aplicación. Los logs nativos de ONNX Runtime se controlan por separado desde `VoiceAppConfig.json`, mediante `Inference.LogSeverityLevel` e `Inference.LogVerbosityLevel`.
-
-## Estructura del repositorio
-
-```text
-VoiceScribe/
-├── VoiceScribe.sln
-├── src/
-│   ├── VoiceScribe.Console/
-│   │   ├── Audio/
-│   │   ├── Benchmark/
-│   │   ├── CommandLine/
-│   │   ├── Program.cs
-│   │   ├── appsettings.json
-│   │   ├── VoiceAppConfig.json
-│   │   └── VoiceScribe.Console.csproj
-│   └── VoiceScribe.Core/
-│       ├── Audio/
-│       │   └── AudioFeatureExtractor.cs
-│       ├── Configuration/
-│       │   └── VoiceAppConfig.cs
-│       ├── Engine/
-│       │   └── NemotronEngine.cs
-│       ├── ModelAssets/
-│       │   └── ModelDownloader.cs
-│       └── VoiceScribe.Core.csproj
-└── artifacts/
-    └── models/                 # Ignorado por Git
-```
-
-## Dependencias principales
-
-| Paquete | Uso |
+| Problem | Check |
 | --- | --- |
-| `Microsoft.Windows.AI.MachineLearning` | Runtime ONNX/WindowsML único. Incluye CPU y DirectML. |
-| `NAudio` | Enumeración de dispositivos y captura de audio en Windows. |
-| `Microsoft.Extensions.Logging` | Registro de eventos y errores. |
-| `Microsoft.Extensions.Configuration` | Lectura de `appsettings.json` para configuración estándar de logging. |
+| Model files are not found | Confirm `ModelDownloadsPath` and the configured model file list. |
+| Download fails | Check network access, Hugging Face access, and `RepoUrl`. |
+| No microphone is listed | Confirm Windows can see the device and the app has microphone permission. |
+| No transcription appears | Confirm the selected microphone, input level, silence threshold, model files, and ONNX graph contract. |
+| DirectML is not fully used | Check logs for per-graph CPU fallback, especially for `encoder.onnx`. |
 
-Las versiones exactas se encuentran en los archivos `.csproj`.
+## License and Model Terms
 
-## Códigos de salida
-
-| Código | Motivo |
-| ---: | --- |
-| `1` | No fue posible cargar una configuración válida. |
-| `2` | La lista de archivos del modelo está vacía. |
-| `3` | La ruta de descarga del modelo no está configurada. |
-| `4` | Faltan archivos del modelo y no pudieron descargarse. |
-| `5` | No fue posible cargar el contrato desde `genai_config.json`. |
-| `6` | La configuración no es compatible con el modelo. |
-| `10` | No se detectó ningún dispositivo de entrada. |
-
-## Limitaciones conocidas
-
-- Solo funciona en Windows porque los proyectos apuntan a `net10.0-windows10.0.18362.0`, usan WindowsML y la captura usa NAudio.
-- Si la inferencia no mantiene el ritmo y la cola se llena, se descartan fragmentos nuevos para no bloquear el callback de captura.
-- La aplicación exige que la frecuencia y duración configuradas produzcan exactamente las muestras requeridas por el modelo; todavía no implementa resampling.
-- El contrato depende de la estructura de `genai_config.json` incluida con esta familia de exportaciones.
-- Se omiten bloques cuyo pico de amplitud sea inferior a `0.003`.
-- No hay beam search, timestamps, separación por hablante, puntuación de confianza ni segmentación formal de frases.
-- El nivel de logging administrado se configura en `appsettings.json`; los logs nativos de ONNX Runtime se configuran en `VoiceAppConfig.json`.
-- No existe todavía una validación comparativa del preprocesamiento frente a la implementación original del modelo ni una prueba automatizada integral con los tres grafos ONNX.
-
-## Solución de problemas
-
-### No se encuentra el modelo
-
-Comprueba que `ModelDownloadsPath` apunte al directorio correcto y que contenga todos los archivos declarados en `ModelFiles`.
-
-### La descarga falla
-
-Verifica la conexión, el acceso a Hugging Face y la URL configurada. Las descargas parciales no se validan automáticamente; elimina manualmente un archivo incompleto antes de reintentar.
-
-### No aparece ningún micrófono
-
-Comprueba que Windows reconozca el dispositivo y que la aplicación tenga permiso para acceder al micrófono.
-
-### No se muestra transcripción
-
-Comprueba:
-
-- Que el micrófono seleccionado sea el correcto.
-- Que la señal supere el umbral de silencio.
-- Que los archivos correspondan exactamente a la exportación esperada.
-- Que las formas y nombres de entrada/salida ONNX coincidan con los usados por `NemotronEngine`.
-
-Para inspeccionar más información, cambia temporalmente el nivel mínimo de logging en `appsettings.json`. Para logs nativos de ONNX Runtime, ajusta `Inference.LogSeverityLevel` e `Inference.LogVerbosityLevel` en `VoiceAppConfig.json`.
-
-## Licencia y modelo
-
-Este repositorio no contiene actualmente un archivo de licencia. Antes de redistribuir el código o los pesos, añade una licencia explícita y revisa por separado los términos del modelo y de sus archivos publicados en Hugging Face.
+This repository does not currently include a license file. Add an explicit code license before redistribution, and review the separate license and usage terms for the model files published on Hugging Face.

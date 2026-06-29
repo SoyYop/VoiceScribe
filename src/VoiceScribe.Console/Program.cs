@@ -210,8 +210,8 @@ class Program
                     "[Application] Cancellation requested.");
             }
 
-            waveSource.DataAvailable -= engine.ProcessAudioChunk;
             waveSource.StopRecording();
+            waveSource.DataAvailable -= engine.ProcessAudioChunk;
             await engine.StopAsync(shutdownCts.Token);
 
             engineLogger.LogInformation("[Application] Ending application. Resources released.");

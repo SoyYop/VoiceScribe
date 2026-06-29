@@ -17,6 +17,10 @@ namespace VoiceScribe.Core.Configuration
 
         public int QueueCapacity { get; set; } = 8;
 
+        public int TrailingSilenceChunks { get; set; } = 0;
+
+        public int FinalSilencePaddingChunks { get; set; } = 4;
+
         public int SamplesPerBuffer =>
             checked(SampleRate * BufferMilliseconds / 1000);
     }

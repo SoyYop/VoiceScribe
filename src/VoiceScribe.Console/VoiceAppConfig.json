@@ -7,7 +7,9 @@
     "Channels": 1,
     "BufferMilliseconds": 560,
     "SilenceThreshold": 0.003,
-    "QueueCapacity": 8
+    "QueueCapacity": 8,
+    "TrailingSilenceChunks": 0,
+    "FinalSilencePaddingChunks": 4
   },
   "Inference": {
     "ExecutionProvider": "DirectMl",

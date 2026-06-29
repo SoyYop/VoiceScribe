@@ -26,6 +26,10 @@ namespace VoiceScribe.Core.Configuration
                 errors.Add("Audio.BufferMilliseconds must be greater than zero.");
             if (audio.QueueCapacity <= 0)
                 errors.Add("Audio.QueueCapacity must be greater than zero.");
+            if (audio.TrailingSilenceChunks < 0)
+                errors.Add("Audio.TrailingSilenceChunks must be zero or greater.");
+            if (audio.FinalSilencePaddingChunks < 0)
+                errors.Add("Audio.FinalSilencePaddingChunks must be zero or greater.");
             if (audio.SilenceThreshold is < 0 or > 1)
                 errors.Add("Audio.SilenceThreshold must be between 0 and 1.");
             if ((long)audio.SampleRate * audio.BufferMilliseconds % 1000 != 0)

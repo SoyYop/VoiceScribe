@@ -22,6 +22,8 @@ public sealed class VoiceAppConfigValidatorTests
         config.Audio.SampleRate = 8000;
         config.Audio.BufferMilliseconds = 100;
         config.Audio.QueueCapacity = 0;
+        config.Audio.TrailingSilenceChunks = -1;
+        config.Audio.FinalSilencePaddingChunks = -1;
         config.Nemotron.BlankId = 20000;
         config.Nemotron.MaxSymbolsPerStep = 0;
         config.Inference.DeviceId = -1;
@@ -33,6 +35,8 @@ public sealed class VoiceAppConfigValidatorTests
             VoiceAppConfigValidator.Validate(config, CreateModel());
 
         Assert.Contains(errors, error => error.Contains("QueueCapacity"));
+        Assert.Contains(errors, error => error.Contains("TrailingSilenceChunks"));
+        Assert.Contains(errors, error => error.Contains("FinalSilencePaddingChunks"));
         Assert.Contains(errors, error => error.Contains("SampleRate is 8000"));
         Assert.Contains(errors, error => error.Contains("samples per buffer"));
         Assert.Contains(errors, error => error.Contains("MaxSymbolsPerStep"));
@@ -131,7 +135,9 @@ public sealed class VoiceAppConfigValidatorTests
             Channels = 1,
             BufferMilliseconds = 560,
             SilenceThreshold = 0.003f,
-            QueueCapacity = 8
+            QueueCapacity = 8,
+            TrailingSilenceChunks = 0,
+            FinalSilencePaddingChunks = 4
         },
         Nemotron = new NemotronModelOptions(),
         Inference = new OnnxRuntimeOptions()

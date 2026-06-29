@@ -1,276 +1,177 @@
-# VoiceScribe: restricciones e invariantes técnicas
+# VoiceScribe Technical Constraints
 
-Este documento registra las condiciones que deben preservarse al modificar VoiceScribe. Su objetivo es evitar regresiones causadas por asumir formas de tensores, parámetros de audio o comportamientos de concurrencia que no corresponden al modelo real.
+This file captures invariants that should be preserved when changing VoiceScribe internals. Keep it short and update it when audio capture, preprocessing, ONNX execution, streaming state, decoding, or shutdown behavior changes.
 
-Antes de modificar captura de audio, preprocesamiento, sesiones ONNX, decodificación RNN-T o apagado de la aplicación, se debe revisar este archivo.
+## Sources of Truth
 
-## Fuentes de verdad
+Use model data in this order:
 
-Los valores relacionados con el modelo deben obtenerse en este orden:
+1. `genai_config.json`, loaded through `NemotronModelDefinition`.
+2. ONNX session metadata, used to verify real tensor names, shapes, and types.
+3. `audio_processor_config.json`, used by `AudioFeatureExtractor` for preprocessing parameters.
+4. `VoiceAppConfig.json`, used only for operational settings and explicit overrides.
+5. Code defaults, only as documented fallbacks.
 
-1. `genai_config.json`, cargado mediante `NemotronModelDefinition`.
-2. Metadata de las sesiones ONNX, para verificar formas y tipos reales.
-3. `VoiceAppConfig.json`, únicamente para opciones operativas y sobrescrituras explícitas.
-4. Valores predeterminados del código, solo como fallback documentado.
+Do not hard-code ONNX node names, file names, tensor dimensions, `blank_id`, or `max_symbols_per_step` in `NemotronEngine`.
 
-No se deben volver a fijar en `NemotronEngine` nombres de nodos, nombres de archivos, dimensiones, `blank_id` o `max_symbols_per_step`.
+## Audio Contract
 
-## Contrato del modelo
-
-La exportación utilizada está compuesta por:
-
-- Encoder ONNX.
-- Decoder ONNX.
-- Joint o joiner ONNX.
-- `tokenizer.json`.
-- `genai_config.json`.
-- `audio_processor_config.json`.
-
-`NemotronModelDefinition` debe seguir cargando desde `genai_config.json`:
-
-- Tamaño del vocabulario.
-- `blank_id`.
-- `max_symbols_per_step`.
-- Frecuencia de muestreo.
-- Muestras por bloque.
-- Tamaños ocultos del encoder y decoder.
-- Número de capas del decoder.
-- Nombres de archivos ONNX.
-- Nombres de entradas y salidas de cada grafo.
-
-Si cambia la estructura de `genai_config.json`, debe adaptarse el parser y fallar durante el arranque con un mensaje claro. No se debe continuar con un contrato parcial.
-
-## Runtime ONNX
-
-VoiceScribe usa WindowsML como único runtime ONNX mediante `Microsoft.Windows.AI.MachineLearning`. No deben reintroducirse builds separados para `Microsoft.ML.OnnxRuntime`, `Microsoft.ML.OnnxRuntime.DirectML` o `Microsoft.ML.OnnxRuntime.Gpu` sin una rama experimental y mediciones comparativas.
-
-`Inference.ExecutionProvider` no representa paquetes NuGet ni flavors de compilación. Solo puede seleccionar proveedores disponibles dentro de WindowsML:
-
-- `Cpu`.
-- `DirectMl`.
-
-El proveedor CPU está incluido en WindowsML. El fallback de DirectML a CPU debe seguir creando una sesión sin registrar explícitamente DirectML, no agregando un paquete CPU separado.
-
-Si se retoma otro runtime en el futuro:
-
-- No se deben mezclar paquetes ONNX Runtime alternativos en el mismo output.
-- Deben actualizarse `readme.md`, `vram.md`, pruebas de factories y validación de configuración.
-- Debe medirse con `--benchmark` y con micrófono real antes de promover el cambio.
-
-## Audio
-
-La captura debe cumplir:
+The live capture settings must match the model:
 
 ```text
-SamplesPerBuffer = SampleRate × BufferMilliseconds / 1000
+SamplesPerBuffer = SampleRate * BufferMilliseconds / 1000
 SamplesPerBuffer = model.ChunkSamples
 SampleRate = model.SampleRate
 ```
 
-Para la exportación actual:
+For the current export:
 
-- Frecuencia: 16 000 Hz.
-- Bloque: 8960 muestras.
-- Duración: 560 ms.
+- `SampleRate = 16000`
+- `ChunkSamples = 8960`
+- `BufferMilliseconds = 560`
 
-Actualmente no existe resampling. No se debe aceptar una frecuencia diferente a la requerida por el modelo.
+There is no resampling. Startup must reject incompatible sample rates or chunk sizes before opening the microphone.
 
-Los formatos PCM admitidos son 8, 16, 24 y 32 bits enteros. En entrada multicanal se procesa únicamente el primer canal. Cambiar este comportamiento requiere implementar y documentar una política de mezcla o selección de canal.
+Supported PCM input depths are 8, 16, 24, and 32-bit integer. For multichannel input, only the first channel is read. A different channel policy must be implemented and documented explicitly.
 
-Los callbacks de NAudio pueden entregar:
+NAudio callbacks may deliver less than, exactly, or more than one model chunk. The accumulator must preserve partial and leftover bytes.
 
-- Menos de un bloque.
-- Exactamente un bloque.
-- Más de un bloque.
+On normal end-of-stream, any final partial chunk must be padded with silence and processed. Configured final-silence padding chunks must also bypass the silence filter so the streaming model receives trailing context before shutdown. Optional trailing silence during live capture is allowed, but the default behavior should keep live silence filtering unchanged.
 
-Por ello, no se deben descartar bytes sobrantes ni asumir que cada evento equivale a una inferencia. El acumulador debe conservar los bytes restantes hasta completar el siguiente bloque.
+## Audio Preprocessor
 
-`AudioFeatureExtractor.NormalizeChunkLength` no sustituye la validación de captura. El arranque debe rechazar configuraciones incompatibles antes de iniciar el micrófono.
+`AudioFeatureExtractor` converts PCM float samples in `[-1, 1]` to frame-major log-mel features for the encoder.
 
-## Concurrencia y tiempo real
-
-`WaveInEvent.DataAvailable` debe permanecer corto y no bloqueante:
-
-- Copiar únicamente los bytes válidos.
-- Intentar encolarlos.
-- Retornar sin ejecutar extracción de características ni inferencia ONNX.
-
-La inferencia debe ejecutarse en un único worker para preservar el orden del audio y el estado de streaming.
-
-La cola debe ser acotada. Si se llena, la política actual es descartar el fragmento nuevo y registrar una advertencia. No debe cambiarse a una espera bloqueante dentro del callback de NAudio.
-
-Las sesiones ONNX y los estados del decoder/encoder no deben utilizarse simultáneamente desde varios threads sin introducir sincronización y pruebas específicas.
-
-El worker acepta cancelación. El apagado normal completa y drena la cola; una cancelación explícita puede interrumpir el trabajo pendiente después de finalizar la inferencia síncrona que ya esté en curso.
-
-## Formas de tensores ONNX
-
-Las dimensiones dinámicas de ONNX suelen aparecer como `-1`. No todas significan lo mismo y no deben convertirse globalmente a `1`.
-
-Solo se resuelven con tamaño inicial `1` los ejes dinámicos de los tensores de estado inicial usados por:
-
-- Batch de streaming.
-- Secuencia inicial de `targets`.
-- Estados recurrentes iniciales.
-
-Después de resolverlos, las formas deben validarse contra `NemotronModelDefinition`.
-
-### Decoder targets
-
-`targets` tiene una dimensión de secuencia dinámica. El estado inicial debe ser un tensor de rango 2 equivalente a `[1, 1]`.
-
-El error que originó esta regla fue:
+The current standard tensor shape is:
 
 ```text
-Input 'targets' has an unresolved dimension at index 1.
+[1, 65, 128]
 ```
 
-No se debe volver a rechazar automáticamente esta dimensión dinámica ni aplicar la misma solución indiscriminadamente a cualquier tensor.
+That is 56 current frames from an 8,960-sample chunk plus nine cached pre-encoder frames. Preserve the feature cache across chunks unless the streaming state is intentionally reset.
 
-### Salida del decoder
+The extractor is responsible for chunk normalization, optional dithering, preemphasis, Hann windowing, 512-point FFT, Slaney-style mel filters, log energy conversion, and pre-encoder feature caching.
 
-La salida de un paso del decoder contiene 640 valores para la exportación actual, pero el eje final del tensor puede medir `1`. Por ello:
+## Runtime and Providers
 
-- El tamaño del embedding de un paso se valida con `Tensor.Length`.
-- No se valida usando `Dimensions[^1]`.
-- Antes de enviarlo al joint se reinterpreta como `[1, 1, DecoderHiddenSize]`.
+VoiceScribe uses `Microsoft.Windows.AI.MachineLearning` as the only ONNX runtime package.
 
-El error que originó esta regla fue:
+Allowed configured providers are:
 
-```text
-Decoder produced embedding size 1; expected 640.
-```
+- `Cpu`
+- `DirectMl`
 
-### Salida del encoder
+Do not mix WindowsML with `Microsoft.ML.OnnxRuntime`, `Microsoft.ML.OnnxRuntime.DirectML`, or `Microsoft.ML.OnnxRuntime.Gpu` in the same build output. Any alternate runtime should be isolated in an experiment branch, benchmarked, tested with a microphone, and documented before adoption.
 
-La salida acústica se interpreta como `[1, T, EncoderHiddenSize]`. Al extraer un frame:
+CPU fallback after a DirectML session failure must create a CPU session through WindowsML. It must not add a separate CPU ONNX Runtime package.
 
-- Debe usarse el tamaño oculto declarado por el modelo.
-- El resultado enviado al joint debe ser `[1, 1, EncoderHiddenSize]`.
+## Tensor Shapes
 
-### Estados recurrentes
+Dynamic ONNX dimensions such as `-1` must be resolved according to tensor meaning, not blindly converted to `1`.
 
-Los estados `h_in` y `c_in` deben ser de rango 3 y coincidir con:
+Rules that must remain true:
 
-```text
-[DecoderLayerCount, 1, DecoderHiddenSize]
-```
+- Initial decoder `targets` resolves to a rank-2 tensor equivalent to `[1, 1]`.
+- Decoder output embedding size is validated with `Tensor.Length`, not only the last dimension, then reshaped for the joint graph as `[1, 1, DecoderHiddenSize]`.
+- Encoder output frames are interpreted as `[1, T, EncoderHiddenSize]`.
+- Decoder `h_in` and `c_in` are rank-3 tensors shaped `[DecoderLayerCount, 1, DecoderHiddenSize]`.
+- Encoder cache tensors are created from ONNX metadata, validated against the model contract, and updated from declared `cache_*_next` outputs.
 
-Sus siguientes valores se obtienen de `h_out` y `c_out` después de emitir un token no blank.
+## Streaming State and Decoding
 
-Los tensores persistentes `h_in` y `c_in` deben reutilizarse. Los valores de salida se copian sobre sus buffers; no se deben recrear ambos tensores por cada token.
+Inference must remain sequential for a single stream. ONNX sessions, encoder caches, and decoder states are not safe to use concurrently without new synchronization and tests.
 
-### Cachés del encoder
+RNN-T decoding rules:
 
-Las cachés iniciales se crean desde la metadata ONNX y se validan contra el tamaño oculto del encoder. Después de cada ejecución deben reemplazarse usando las salidas `cache_*_next` declaradas en el contrato.
+- `blank_id` comes from the model unless explicitly overridden.
+- `max_symbols_per_step` comes from the model unless explicitly overridden.
+- A blank token ends emission for the current acoustic frame.
+- Decoder recurrent state advances only after a non-blank token.
+- Do not assume blank is the final vocabulary id.
 
-Los objetos tensor de caché deben conservarse durante la sesión. Se actualizan sus buffers para evitar asignaciones de gran tamaño por cada bloque.
+Tokenizer behavior:
 
-## Decodificación RNN-T
+- Read vocabulary from `model.vocab` in `tokenizer.json`.
+- Accept string entries, array entries where the first item is the token, and object entries with `piece`.
+- Strip special tokens that start with `<` or `[`.
+- Convert `▁` to a space and remove the `##` prefix.
 
-- `blank_id` se obtiene del modelo, salvo sobrescritura explícita.
-- `max_symbols_per_step` se obtiene del modelo, salvo sobrescritura explícita.
-- `BlankId` debe estar dentro del rango del vocabulario.
-- Un token blank termina la emisión para el frame acústico actual.
-- Los estados del decoder solo avanzan después de un token no blank.
+## Concurrency
 
-No se debe asumir que blank es siempre la última clase, aunque esto sea común en algunos modelos.
+`WaveInEvent.DataAvailable` must stay short:
 
-## Tokenizador
+- Copy only valid bytes.
+- Try to enqueue the fragment.
+- Return without feature extraction, ONNX inference, or blocking waits.
 
-El tokenizador actual espera `model.vocab` dentro de `tokenizer.json`.
+The bounded queue protects capture latency. If full, the current policy is to drop the newest fragment and log a warning.
 
-Se admiten vocabularios cuyos elementos sean:
+A single worker must drain the queue, accumulate complete chunks, and run inference in audio order.
 
-- Strings.
-- Arreglos donde el primer elemento es el token.
-- Objetos con propiedad `piece`.
+## Shutdown
 
-Si se incorpora otra familia de tokenizadores, debe aislarse en una implementación específica en lugar de añadir condiciones indefinidamente dentro del motor.
+Normal shutdown order:
 
-## Ciclo de vida y apagado
+1. Stop capture.
+2. Unsubscribe `DataAvailable`.
+3. Complete the queue.
+4. Wait for the worker to drain pending chunks.
+5. Dispose ONNX sessions and output resources.
 
-El orden de apagado debe ser:
+Do not use `Thread.Sleep` as a drain mechanism.
 
-1. Desuscribir `DataAvailable`.
-2. Detener la captura.
-3. Completar la cola.
-4. Esperar a que el worker procese los bloques pendientes.
-5. Liberar sesiones ONNX y recursos de salida.
+`WaveInEvent` should be stopped before unsubscribing `DataAvailable`, so final capture events emitted during stop can still enter the queue.
 
-No se debe reintroducir `Thread.Sleep` como mecanismo de drenaje.
+`StopAsync` and `DisposeAsync` must remain idempotent. After queue completion, no new audio should be accepted.
 
-`StopAsync` y `DisposeAsync` deben permanecer idempotentes. No deben aceptar audio después de completar la cola.
+Model downloads must honor cancellation. A failed or canceled download must not leave a partial file that later passes validation based only on file existence.
 
-La descarga de modelos también debe propagar `CancellationToken`. Una descarga cancelada o fallida no debe dejar un archivo parcial que pueda superar posteriormente una verificación basada solo en existencia.
+## Required Validation
 
-## Inicio concurrente
+Before opening the microphone, validation must report all detected configuration errors for:
 
-La carga de sesiones ONNX puede ejecutarse en segundo plano mientras el usuario selecciona el micrófono. Deben cumplirse estas condiciones:
+- Positive and supported audio settings.
+- Silence threshold between `0` and `1`.
+- Queue capacity greater than zero.
+- Trailing silence padding greater than or equal to zero.
+- Final silence padding greater than or equal to zero.
+- Whole-number samples per buffer.
+- Capture sample rate matching the model.
+- Capture chunk samples matching the model.
+- Readable `genai_config.json`.
+- Valid vocabulary and `blank_id`.
+- Positive `max_symbols_per_step`.
 
-- La definición y configuración del modelo ya fueron validadas.
-- La captura no comienza hasta que la selección y la carga hayan terminado.
-- Si se cancela la selección, cualquier motor que termine de cargarse debe ser dispuesto.
-- Los errores de carga deben observarse y propagarse antes de iniciar la captura.
+## Change Checklist
 
-## Propiedad de recursos
+For audio, ONNX, streaming, or decoding changes:
 
-Debe existir un único propietario claro para:
+- Review `genai_config.json` and avoid duplicating its contract in code.
+- Keep ONNX names centralized in the model definition.
+- Preserve partial PCM accumulation.
+- Preserve sequential streaming state.
+- Resolve dynamic dimensions by tensor meaning.
+- Keep capture callbacks non-blocking.
+- Keep shutdown drain behavior deterministic.
+- Run `dotnet build VoiceScribe.sln`.
+- Run `dotnet test VoiceScribe.sln` when tests are expected to work in the current environment.
+- Manually test with a microphone when changing live capture or ONNX inference.
 
-- Sesiones ONNX.
-- Worker y cola.
-- Escritor de transcripción.
-- Fuente de audio.
+## Current Test Coverage
 
-El programa que crea el escritor de transcripción es su único propietario y debe disponerlo. El motor puede escribir y hacer `Flush`, pero no debe cerrar ni disponer el writer recibido.
+Covered:
 
-## Validación obligatoria
+- `genai_config.json` parsing.
+- Compatible and incompatible audio configuration validation.
+- Dynamic `targets` initialization.
+- Static recurrent state dimensions.
+- Audio feature extractor output shape.
+- Audio feature extractor streaming reset.
 
-Antes de abrir el micrófono se debe validar:
+Not covered yet:
 
-- Configuración de audio positiva y soportada.
-- Umbral de silencio entre 0 y 1.
-- Capacidad de cola mayor que cero.
-- Número entero de muestras por búfer.
-- Frecuencia coincidente con el modelo.
-- Muestras por bloque coincidentes con el modelo.
-- Vocabulario y `blank_id` válidos.
-- `max_symbols_per_step` positivo.
-- Existencia y lectura de `genai_config.json`.
-
-La validación debe presentar todos los errores de configuración detectados, no únicamente el primero.
-
-## Checklist para cambios
-
-Antes de considerar completo un cambio relacionado con audio o inferencia:
-
-- [ ] Se revisó `genai_config.json` y no se duplicó su información en código.
-- [ ] No se añadieron nombres de nodos ONNX como strings dispersos.
-- [ ] No se asumió que el último eje representa siempre el embedding.
-- [ ] Las dimensiones dinámicas se resolvieron según el significado del tensor.
-- [ ] El callback de audio sigue sin ejecutar inferencia ni esperar.
-- [ ] Los bytes parciales y sobrantes se conservan correctamente.
-- [ ] El orden del audio y el estado de streaming siguen siendo secuenciales.
-- [ ] El apagado completa y drena la cola.
-- [ ] `dotnet build VoiceScribe.sln` finaliza sin errores ni advertencias.
-- [ ] Se realizó una prueba manual con micrófono y se confirmó que no aparecen errores ONNX.
-- [ ] Si cambió una restricción, se actualizó este archivo y `readme.md`.
-
-## Cobertura automatizada
-
-La suite actual cubre:
-
-- Parseo de `genai_config.json`.
-- Validación compatible e incompatible de captura contra el modelo.
-- Resolución de `targets` dinámico a `[1, 1]`.
-- Preservación de dimensiones estáticas de estados recurrentes.
-- Forma de salida del extractor acústico.
-- Reinicio del estado de streaming del extractor.
-
-Siguen pendientes:
-
-- Validación automatizada del layout real de la salida del decoder.
-- Contrato completo de entradas y salidas usando los tres grafos ONNX.
-- Acumulación de fragmentos PCM parciales y múltiples.
-- Cola llena y política de descarte.
-- Idempotencia de `StopAsync` y `DisposeAsync`.
+- Full three-graph ONNX execution with real model files.
+- Decoder output layout against real ONNX metadata.
+- PCM accumulator edge cases for partial and multiple chunks.
+- Full queue behavior under sustained overload.
+- `StopAsync` and `DisposeAsync` idempotency.
