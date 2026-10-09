@@ -1,5 +1,9 @@
 # VoiceScribe
 
+## Windows dictation notebook
+
+The independent WinUI 3 application is in [`src/VoiceScribe.Notepad`](src/VoiceScribe.Notepad/README.md). Run it with `dotnet run --project src/VoiceScribe.Notepad`. It stores editable dictation sessions as Markdown in the user's Documents/VoiceScribe folder. Configure the microphone and local model folder from its Tools menu.
+
 VoiceScribe is a Windows console prototype for local, near real-time speech transcription. It captures microphone audio, converts it to log-mel features, and runs the **NVIDIA Nemotron 3.5 ASR Streaming 0.6B** ONNX export through a local RNN-T pipeline.
 
 The application does not send audio to an external service. Internet access is only needed the first time model files are downloaded.

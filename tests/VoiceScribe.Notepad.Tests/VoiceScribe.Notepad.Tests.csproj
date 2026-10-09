@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+ <PropertyGroup>
+  <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+  <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+  <IsPackable>false</IsPackable><IsTestProject>true</IsTestProject>
+  <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+ </PropertyGroup>
+ <ItemGroup>
+  <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1"/>
+  <PackageReference Include="xunit" Version="2.9.3"/>
+  <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2"><PrivateAssets>all</PrivateAssets></PackageReference>
+  <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9"/>
+  <PackageReference Include="Microsoft.Windows.AI.MachineLearning" Version="2.1.71"/>
+  <PackageReference Include="NAudio" Version="2.3.0"/>
+  <Compile Include="../../src/VoiceScribe.Notepad/Audio/*.cs" Link="Audio/%(Filename)%(Extension)"/>
+  <Compile Include="../../src/VoiceScribe.Notepad/Configuration/*.cs" Link="Configuration/%(Filename)%(Extension)"/>
+  <Compile Include="../../src/VoiceScribe.Notepad/Engine/*.cs" Link="Engine/%(Filename)%(Extension)"/>
+  <Compile Include="../../src/VoiceScribe.Notepad/ModelAssets/*.cs" Link="ModelAssets/%(Filename)%(Extension)"/>
+  <Compile Include="../../src/VoiceScribe.Notepad/Models/NoteSession.cs" Link="Models/NoteSession.cs"/>
+  <Compile Include="../../src/VoiceScribe.Notepad/Services/SessionStore.cs" Link="Services/SessionStore.cs"/>
+ </ItemGroup>
+</Project>

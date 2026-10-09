@@ -1,0 +1,130 @@
+using VoiceScribe.Notepad.ModelAssets;
+using VoiceScribe.Notepad.Engine;
+
+namespace VoiceScribe.Notepad.Configuration
+{
+    public static class VoiceAppConfigValidator
+    {
+        private static readonly int[] SupportedBitDepths = [8, 16, 24, 32];
+
+        public static IReadOnlyList<string> Validate(
+            VoiceAppConfig config,
+            NemotronModelDefinition model)
+        {
+            var errors = new List<string>();
+            AudioCaptureOptions audio = config.Audio;
+            NemotronModelOptions nemotron = config.Nemotron;
+            OnnxRuntimeOptions inference = config.Inference;
+
+            if (audio.SampleRate <= 0)
+                errors.Add("Audio.SampleRate must be greater than zero.");
+            if (!SupportedBitDepths.Contains(audio.BitsPerSample))
+                errors.Add("Audio.BitsPerSample must be 8, 16, 24 or 32.");
+            if (audio.Channels <= 0)
+                errors.Add("Audio.Channels must be greater than zero.");
+            if (audio.BufferMilliseconds <= 0)
+                errors.Add("Audio.BufferMilliseconds must be greater than zero.");
+            if (audio.QueueCapacity <= 0)
+                errors.Add("Audio.QueueCapacity must be greater than zero.");
+            if (audio.TrailingSilenceChunks < 0)
+                errors.Add("Audio.TrailingSilenceChunks must be zero or greater.");
+            if (audio.FinalSilencePaddingChunks < 0)
+                errors.Add("Audio.FinalSilencePaddingChunks must be zero or greater.");
+            if (audio.SilenceThreshold is < 0 or > 1)
+                errors.Add("Audio.SilenceThreshold must be between 0 and 1.");
+            if ((long)audio.SampleRate * audio.BufferMilliseconds % 1000 != 0)
+                errors.Add("Audio.SampleRate and BufferMilliseconds must produce a whole number of samples.");
+
+            long samplesPerBuffer =
+                (long)audio.SampleRate * audio.BufferMilliseconds / 1000;
+
+            if (audio.SampleRate != model.SampleRate)
+                errors.Add(
+                    $"Audio.SampleRate is {audio.SampleRate}, but the model requires {model.SampleRate}.");
+
+            if (samplesPerBuffer != model.ChunkSamples)
+                errors.Add(
+                    $"Audio produces {samplesPerBuffer} samples per buffer, but the model requires {model.ChunkSamples}.");
+
+            if (nemotron.MaxSymbolsPerStep is <= 0)
+                errors.Add("Nemotron.MaxSymbolsPerStep must be greater than zero when specified.");
+
+            ValidateProvider(
+                "Inference.ExecutionProvider",
+                inference.ExecutionProvider,
+                errors);
+            ValidateProvider(
+                "Inference.EncoderProvider",
+                inference.EncoderProvider,
+                errors);
+            ValidateProvider(
+                "Inference.DecoderProvider",
+                inference.DecoderProvider,
+                errors);
+            ValidateProvider(
+                "Inference.JoinerProvider",
+                inference.JoinerProvider,
+                errors);
+
+            if (inference.DeviceId < 0)
+                errors.Add("Inference.DeviceId must be zero or greater.");
+            if (inference.GpuMemoryLimitMiB is <= 0)
+                errors.Add(
+                    "Inference.GpuMemoryLimitMiB must be greater than zero when specified.");
+            if (!OnnxSessionOptionsConfigurator.IsValidLogSeverityLevel(
+                inference.LogSeverityLevel))
+            {
+                errors.Add(
+                    "Inference.LogSeverityLevel must be Verbose, Info, Warning, Error or Fatal when specified.");
+            }
+
+            if (inference.LogVerbosityLevel is < 0)
+                errors.Add(
+                    "Inference.LogVerbosityLevel must be zero or greater when specified.");
+
+            if (model.MaxSymbolsPerStep <= 0)
+                errors.Add("The model declares an invalid max_symbols_per_step value.");
+            if (model.ChunkSamples <= 0 || model.SampleRate <= 0)
+                errors.Add("The model declares invalid audio dimensions.");
+            if (model.VocabularySize <= 0)
+                errors.Add("The model declares an invalid vocabulary size.");
+
+            long blankId = nemotron.BlankId ?? model.BlankId;
+            if (blankId < 0 || blankId >= model.VocabularySize)
+                errors.Add(
+                    $"Nemotron.BlankId must be within [0, {model.VocabularySize - 1}].");
+
+            return errors;
+        }
+
+        private static void ValidateProvider(
+            string propertyName,
+            OnnxExecutionProvider? provider,
+            List<string> errors)
+        {
+            if (!provider.HasValue)
+                return;
+
+            ValidateProvider(propertyName, provider.Value, errors);
+        }
+
+        private static void ValidateProvider(
+            string propertyName,
+            OnnxExecutionProvider provider,
+            List<string> errors)
+        {
+            if (!Enum.IsDefined(provider))
+            {
+                errors.Add($"{propertyName} is invalid.");
+                return;
+            }
+
+            if (!OnnxRuntimeInfo.Supports(provider))
+            {
+                errors.Add(
+                    $"{propertyName} '{provider}' is not available " +
+                    $"in the {OnnxRuntimeInfo.Name} runtime.");
+            }
+        }
+    }
+}
