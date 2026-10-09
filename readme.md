@@ -59,7 +59,7 @@ Edit `src/VoiceScribe.Console/VoiceAppConfig.json` before the first run. The che
     "BufferMilliseconds": 560,
     "SilenceThreshold": 0.003,
     "QueueCapacity": 8,
-    "TrailingSilenceChunks": 0,
+    "TrailingSilenceChunks": 4,
     "FinalSilencePaddingChunks": 4
   },
   "Inference": {
@@ -273,6 +273,8 @@ Each standard chunk produces 56 current frames plus nine cached frames, resultin
 A single worker drains the queue, preserves audio order, accumulates partial PCM fragments until a full model chunk is available, and runs the streaming pipeline. If the queue is full, the newest fragment is dropped and a warning is logged. This protects the capture callback from blocking.
 
 On normal shutdown, the worker pads and processes the final partial chunk, then sends a configurable amount of final silence padding. This gives the streaming RNN-T state trailing context so the last spoken words are less likely to remain pending when the session ends.
+
+The console configuration also processes up to four captured silent chunks after speech (2.24 seconds at the standard chunk size). This lets the model emit the end of a phrase during a pause without waiting for more speech or shutdown. Setting `Audio.TrailingSilenceChunks` to `0` disables this behavior and can leave the last words pending until speech resumes. The core options retain `0` as their fallback default.
 
 ### ONNX Runtime
 
